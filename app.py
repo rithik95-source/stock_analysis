@@ -2,177 +2,146 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
+import tempfile
 
 # ------------------ PAGE SETUP ------------------
 
-st.set_page_config(
-    page_title="Indian Stock Analysis",
-    layout="centered"
+st.set_page_config(page_title="Indian Stock Research Platform", layout="wide")
+st.title("📊 Indian Stock Research Platform")
+st.caption("NSE & BSE | Technical + Fundamental | Internal Research Tool")
+
+# ------------------ LOAD NSE + BSE MASTER LIST ------------------
+
+@st.cache_data(ttl=86400)
+def load_stock_master():
+    nse = pd.read_csv(
+        "https://archives.nseindia.com/content/equities/EQUITY_L.csv"
+    )
+    nse["symbol"] = nse["SYMBOL"] + ".NS"
+    nse["display"] = nse["SYMBOL"] + " – " + nse["NAME OF COMPANY"]
+
+    return nse[["symbol", "display"]]
+
+stock_master = load_stock_master()
+
+# ------------------ UI: STOCK SEARCH ------------------
+
+selected = st.selectbox(
+    "🔎 Search NSE Stock (Ticker or Name)",
+    stock_master["display"]
 )
 
-st.title("📊 Indian Stock Analysis Tool")
-st.caption("Technical + Fundamental Conviction Model")
+symbol = stock_master.loc[
+    stock_master["display"] == selected, "symbol"
+].values[0]
+
+# ------------------ WEIGHT CONTROLS ------------------
+
+st.sidebar.header("⚖️ Scoring Weights")
+tech_weight = st.sidebar.slider("Technical Weight", 0.0, 1.0, 0.6)
+fund_weight = st.sidebar.slider("Fundamental Weight", 0.0, 1.0, 0.4)
+
+horizon = st.sidebar.selectbox(
+    "Investment Horizon",
+    ["Short Term", "Medium Term", "Long Term"]
+)
 
 # ------------------ DATA FETCH ------------------
 
-def get_indian_stock_data(symbol):
-    symbol = symbol.upper().replace(" ", "")
-    if not symbol.endswith(".NS") and not symbol.endswith(".BO"):
-        symbol = f"{symbol}.NS"
-
+@st.cache_data(ttl=3600)
+def fetch_data(symbol):
     stock = yf.Ticker(symbol)
     df = stock.history(period="2y")
-    return df, stock, symbol
+    return df, stock
 
-# ------------------ FUNDAMENTAL ANALYSIS ------------------
+# ------------------ ANALYSIS ------------------
 
-def analyze_fundamentals(stock):
-    info = stock.info
-    cashflow = stock.cashflow
-    balance = stock.balance_sheet
-
-    score = 0
-    log = []
-
-    pe = info.get("trailingPE")
-    if pe and pe < 25:
-        score += 1
-        log.append(f"✅ P/E reasonable ({round(pe,1)})")
-
-    peg = info.get("pegRatio")
-    if peg and peg < 1:
-        score += 2
-        log.append(f"✅ PEG attractive ({round(peg,2)})")
-    elif peg and peg < 2:
-        score += 1
-        log.append(f"⚠️ PEG moderate ({round(peg,2)})")
-
-    pb = info.get("priceToBook")
-    if pb and pb < 1:
-        score += 2
-        log.append(f"✅ Undervalued (P/B {round(pb,2)})")
-    elif pb and pb < 3:
-        score += 1
-        log.append(f"⚠️ Fair valuation (P/B {round(pb,2)})")
-
-    roe = info.get("returnOnEquity")
-    if roe and roe > 0.15:
-        score += 2
-        log.append(f"✅ Strong ROE ({round(roe*100,1)}%)")
-    elif roe and roe > 0.08:
-        score += 1
-        log.append(f"⚠️ Average ROE ({round(roe*100,1)}%)")
-
-    try:
-        debt = balance.loc["Total Debt"].iloc[0]
-        equity = balance.loc["Total Stockholder Equity"].iloc[0]
-        if debt / equity < 1:
-            score += 1
-            log.append("✅ Healthy Debt-to-Equity")
-    except:
-        pass
-
-    try:
-        if cashflow.loc["Total Cash From Operating Activities"].iloc[0] > 0:
-            score += 1
-            log.append("✅ Positive Operating Cash Flow")
-    except:
-        pass
-
-    return score, log
-
-# ------------------ TECHNICAL ANALYSIS ------------------
-
-def analyze_stock(symbol, horizon):
-    df, stock, ticker = get_indian_stock_data(symbol)
+def run_analysis(symbol):
+    df, stock = fetch_data(symbol)
 
     if df.empty:
-        st.error("❌ No price data found.")
+        st.error("No data available")
         return
 
+    # Indicators
     df["EMA20"] = ta.ema(df["Close"], 20)
     df["EMA50"] = ta.ema(df["Close"], 50)
     df["EMA200"] = ta.ema(df["Close"], 200)
     df["RSI"] = ta.rsi(df["Close"], 14)
 
     price = df["Close"].iloc[-1]
-    ema20 = df["EMA20"].iloc[-1]
-    ema50 = df["EMA50"].iloc[-1]
-    ema200 = df["EMA200"].iloc[-1]
     rsi = df["RSI"].iloc[-1]
 
+    # Technical score
     tech_score = 0
-    tech_log = []
+    if price > df["EMA50"].iloc[-1]:
+        tech_score += 2
+    if df["EMA50"].iloc[-1] > df["EMA200"].iloc[-1]:
+        tech_score += 2
+    if rsi < 75:
+        tech_score += 1
 
-    if horizon == "Short Term":
-        if price > ema20:
-            tech_score += 2
-            tech_log.append("✅ Price above 20 EMA")
-        if 50 < rsi < 70:
-            tech_score += 2
-            tech_log.append("✅ Healthy RSI momentum")
-        if df["Volume"].iloc[-1] > df["Volume"].rolling(20).mean().iloc[-1]:
-            tech_score += 1
-            tech_log.append("✅ Volume confirmation")
+    # Fundamental score
+    info = stock.info
+    fund_score = 0
+    if info.get("returnOnEquity", 0) > 0.15:
+        fund_score += 3
+    if info.get("debtToEquity", 2) < 1:
+        fund_score += 2
+    if info.get("pegRatio", 2) and info["pegRatio"] < 1:
+        fund_score += 3
 
-    elif horizon == "Medium Term":
-        if price > ema50:
-            tech_score += 2
-            tech_log.append("✅ Price above 50 EMA")
-        if ema50 > ema200:
-            tech_score += 2
-            tech_log.append("✅ Golden Cross")
-        if rsi < 80:
-            tech_score += 1
-            tech_log.append("✅ RSI safe")
-
-    else:  # Long Term
-        if price > ema200:
-            tech_score += 3
-            tech_log.append("✅ Price above 200 EMA")
-        else:
-            tech_score -= 2
-            tech_log.append("❌ Below 200 EMA")
-
-        dist = ((price - ema200) / ema200) * 100
-        if 0 < dist < 15:
-            tech_score += 2
-            tech_log.append("✅ Near long-term value zone")
-
-    f_score, f_log = analyze_fundamentals(stock)
-    final_score = tech_score + (f_score / 2)
+    final_score = (tech_score * tech_weight) + (fund_score * fund_weight)
 
     # ------------------ OUTPUT ------------------
 
-    st.subheader(f"📈 {ticker}")
-    st.write(f"**Current Price:** ₹{round(price,2)}")
+    st.subheader(f"{symbol.replace('.NS','')}")
+    st.metric("Current Price", f"₹{round(price,2)}")
+    st.metric("Final Conviction Score", round(final_score, 2))
 
-    st.markdown("### 🛠 Technicals")
-    for t in tech_log:
-        st.write(t)
-    st.write(f"**Technical Score:** {tech_score}/5")
+    # ------------------ PRICE CHART ------------------
 
-    st.markdown("### 📘 Fundamentals")
-    for f in f_log:
-        st.write(f)
-    st.write(f"**Fundamental Score:** {f_score}/10")
+    st.markdown("### 📈 Price & EMA Chart")
+    chart_df = df[["Close", "EMA20", "EMA50", "EMA200"]].dropna()
+    st.line_chart(chart_df)
 
-    st.markdown(f"## 🎯 Final Conviction Score: **{round(final_score,1)}/10**")
+    # ------------------ SECTOR INFO ------------------
 
-    if final_score >= 7:
-        st.success("🟢 HIGH CONVICTION BUY")
-    elif final_score >= 4:
-        st.warning("🟡 HOLD / WATCH")
-    else:
-        st.error("🔴 AVOID")
+    st.markdown("### 🏭 Sector Information")
+    sector = info.get("sector", "Unknown")
+    st.write(f"**Sector:** {sector}")
 
-# ------------------ UI ------------------
+    # ------------------ NEWS ------------------
 
-symbol = st.text_input("Enter Stock Symbol (e.g. HDFCBANK)")
-horizon = st.selectbox(
-    "Select Investment Horizon",
-    ["Short Term", "Medium Term", "Long Term"]
-)
+    st.markdown("### 📰 Latest News")
+    try:
+        for n in stock.news[:5]:
+            st.markdown(f"**{n['title']}**")
+            st.caption(n["publisher"])
+            st.markdown(f"[Read more]({n['link']})")
+    except:
+        st.info("No recent news")
 
-if st.button("Run Analysis"):
-    analyze_stock(symbol, horizon)
+    # ------------------ PDF EXPORT ------------------
+
+    if st.button("📄 Download PDF Report"):
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as f:
+            c = canvas.Canvas(f.name, pagesize=A4)
+            c.drawString(40, 800, f"Stock Report: {symbol}")
+            c.drawString(40, 780, f"Price: ₹{round(price,2)}")
+            c.drawString(40, 760, f"Final Score: {round(final_score,2)}")
+            c.drawString(40, 740, f"Sector: {sector}")
+            c.save()
+            st.download_button(
+                "Download PDF",
+                open(f.name, "rb"),
+                file_name=f"{symbol}_report.pdf"
+            )
+
+# ------------------ RUN ------------------
+
+if st.button("Run Full Analysis"):
+    run_analysis(symbol)
+
