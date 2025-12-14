@@ -1,10 +1,10 @@
 streamlit
 yfinance
 pandas
-pandas_ta
+numpy
+pandas-ta
 plotly
 reportlab
 feedparser
 nselib
-pandas_market_calendars
 scipy
