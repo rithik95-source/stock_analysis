@@ -10,7 +10,7 @@ import tempfile
 
 st.set_page_config(page_title="Indian Stock Research Platform", layout="wide")
 st.title("📊 Indian Stock Research Platform")
-st.caption("NSE Stocks | Technical + Fundamental | Free Research Tool")
+st.caption("NSE Stocks | Technical + Fundamental | Research Tool")
 
 # ------------------ LOAD NSE STOCK MASTER ------------------
 
@@ -37,38 +37,47 @@ symbol = stock_master.loc[
 
 # ------------------ SIDEBAR CONTROLS ------------------
 
-st.sidebar.header("⚖️ Scoring Controls")
+st.sidebar.header("⚙️ Controls")
 
-tech_weight = st.sidebar.slider(
-    "Technical Weight", 0.0, 1.0, 0.6, step=0.05
+timeframe_map = {
+    "1 Day": "1d",
+    "7 Days": "7d",
+    "1 Month": "1mo",
+    "3 Months": "3mo",
+    "6 Months": "6mo",
+    "1 Year": "1y",
+    "3 Years": "3y",
+    "All": "max"
+}
+
+timeframe_label = st.sidebar.selectbox(
+    "Price Timeframe",
+    list(timeframe_map.keys()),
+    index=5
 )
 
-fund_weight = st.sidebar.slider(
-    "Fundamental Weight", 0.0, 1.0, 0.4, step=0.05
-)
+period = timeframe_map[timeframe_label]
 
-horizon = st.sidebar.selectbox(
-    "Investment Horizon",
-    ["Short Term", "Medium Term", "Long Term"]
-)
+tech_weight = st.sidebar.slider("Technical Weight", 0.0, 1.0, 0.6, 0.05)
+fund_weight = st.sidebar.slider("Fundamental Weight", 0.0, 1.0, 0.4, 0.05)
 
-# ------------------ DATA FETCH (CACHE SAFE) ------------------
+# ------------------ DATA FETCH ------------------
 
 @st.cache_data(ttl=3600)
-def fetch_price_data(symbol):
+def fetch_price_data(symbol, period):
     stock = yf.Ticker(symbol)
-    df = stock.history(period="2y")
+    df = stock.history(period=period)
     return df
 
-# ------------------ ANALYSIS ENGINE ------------------
+# ------------------ ANALYSIS ------------------
 
-def run_analysis(symbol):
+def run_analysis(symbol, period):
 
-    df = fetch_price_data(symbol)
-    stock = yf.Ticker(symbol)  # DO NOT CACHE THIS
+    df = fetch_price_data(symbol, period)
+    stock = yf.Ticker(symbol)
 
     if df.empty:
-        st.error("❌ No price data available.")
+        st.error("No price data available")
         return
 
     # ------------------ INDICATORS ------------------
@@ -84,82 +93,76 @@ def run_analysis(symbol):
     # ------------------ TECHNICAL SCORE ------------------
 
     tech_score = 0
-    tech_log = []
-
     if price > df["EMA20"].iloc[-1]:
         tech_score += 1
-        tech_log.append("Price above EMA 20")
-
     if price > df["EMA50"].iloc[-1]:
         tech_score += 2
-        tech_log.append("Price above EMA 50")
-
     if df["EMA50"].iloc[-1] > df["EMA200"].iloc[-1]:
         tech_score += 2
-        tech_log.append("Golden Cross")
-
     if rsi < 75:
         tech_score += 1
-        tech_log.append("RSI in safe zone")
 
     # ------------------ FUNDAMENTAL SCORE ------------------
 
     info = stock.info
     fund_score = 0
-    fund_log = []
 
     if info.get("returnOnEquity", 0) > 0.15:
         fund_score += 2
-        fund_log.append("Strong ROE")
-
     if info.get("debtToEquity", 2) < 1:
         fund_score += 2
-        fund_log.append("Low Debt")
-
     peg = info.get("pegRatio")
     if peg and peg < 1:
         fund_score += 3
-        fund_log.append("Attractive PEG")
 
-    # ------------------ FINAL SCORE ------------------
+    # ------------------ FINAL SCORE & RATING ------------------
 
     final_score = (tech_score * tech_weight) + (fund_score * fund_weight)
+
+    if final_score >= 7:
+        rating = "🟢 BUY"
+    elif final_score >= 4:
+        rating = "🟡 HOLD"
+    else:
+        rating = "🔴 AVOID"
 
     # ------------------ OUTPUT ------------------
 
     st.subheader(f"📈 {symbol.replace('.NS','')}")
     st.metric("Current Price", f"₹{round(price,2)}")
-    st.metric("Final Conviction Score", round(final_score, 2))
+    st.metric("Final Score", round(final_score, 2))
+    st.markdown(f"## Final Rating: **{rating}**")
 
     # ------------------ PRICE CHART ------------------
 
     st.markdown("### 📊 Price & EMA Chart")
-    chart_df = df[["Close", "EMA20", "EMA50", "EMA200"]].dropna()
-    st.line_chart(chart_df)
+    st.line_chart(df[["Close", "EMA20", "EMA50", "EMA200"]].dropna())
 
-    # ------------------ TECH & FUND DETAILS ------------------
+    # ------------------ SHAREHOLDING ------------------
 
-    col1, col2 = st.columns(2)
+    st.markdown("### 👥 Shareholding Snapshot (Yahoo Finance)")
 
-    with col1:
-        st.markdown("### 🛠 Technicals")
-        for t in tech_log:
-            st.write("✅", t)
+    try:
+        holders = stock.institutional_holders
+        major = stock.major_holders
 
-    with col2:
-        st.markdown("### 📘 Fundamentals")
-        for f in fund_log:
-            st.write("✅", f)
+        if major is not None:
+            st.write("**Major Holders (%)**")
+            st.dataframe(major)
 
-    # ------------------ SECTOR INFO ------------------
+        if holders is not None:
+            st.write("**Institutional Holders**")
+            st.dataframe(holders)
 
-    st.markdown("### 🏭 Sector Information")
-    sector = info.get("sector", "Unknown")
-    st.write(f"**Sector:** {sector}")
+        st.caption("Note: Indian promoter holding history is not publicly available via free APIs.")
+
+    except:
+        st.info("Shareholding data not available")
 
     # ------------------ NEWS ------------------
 
     st.markdown("### 📰 Latest News")
+
     try:
         for n in stock.news[:5]:
             st.markdown(f"**{n['title']}**")
@@ -171,13 +174,13 @@ def run_analysis(symbol):
     # ------------------ PDF EXPORT ------------------
 
     st.markdown("---")
-    if st.button("📄 Generate PDF Report"):
+    if st.button("📄 Download PDF Report"):
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as f:
             c = canvas.Canvas(f.name, pagesize=A4)
             c.drawString(40, 800, f"Stock Report: {symbol}")
             c.drawString(40, 780, f"Price: ₹{round(price,2)}")
-            c.drawString(40, 760, f"Final Score: {round(final_score,2)}")
-            c.drawString(40, 740, f"Sector: {sector}")
+            c.drawString(40, 760, f"Score: {round(final_score,2)}")
+            c.drawString(40, 740, f"Rating: {rating}")
             c.save()
 
             st.download_button(
@@ -188,5 +191,6 @@ def run_analysis(symbol):
 
 # ------------------ RUN ------------------
 
-if st.button("Run Full Analysis"):
-    run_analysis(symbol)
+if st.button("Run Analysis"):
+    run_analysis(symbol, period)
+
