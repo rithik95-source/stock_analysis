@@ -11,7 +11,7 @@ import numpy as np
 # ================= PAGE SETUP & CONFIG =================
 st.set_page_config(page_title="Indian Stock Research Platform", layout="wide")
 st.title("📊 Indian Stock Research Platform")
-st.caption("Official NSE Data (Price via Yahoo) | Yahoo Finance (Fundamentals)")
+st.caption("Official NSE Data (Price via Yahoo) | Fundamentals adjusted by Market Cap")
 
 # Horizon Weights: How much Tech vs. Fund matters for each timeframe
 HORIZON_WEIGHTS = {
@@ -20,7 +20,8 @@ HORIZON_WEIGHTS = {
     "Long Term":   {"tech": 0.3, "fund": 0.7}
 }
 
-# Added Current Ratio (cr) and Net Profit Margin (npm) targets
+# Base Sector Models (Generic Averages)
+# Note: Debt=9999 for banks means D/E is not the primary factor, P/B is.
 SECTOR_MODELS = {
     "Banks": {"roe": 0.13, "debt": 9999, "peg": 1.5, "cr": 0.0, "npm": 0.15, "pb_target": 1.5},
     "IT Services": {"roe": 0.18, "debt": 50, "peg": 2.0, "cr": 2.0, "npm": 0.12, "pb_target": 3.0},
@@ -28,6 +29,22 @@ SECTOR_MODELS = {
     "FMCG": {"roe": 0.20, "debt": 60, "peg": 3.0, "cr": 1.8, "npm": 0.10, "pb_target": 4.0},
 }
 DEFAULT_MODEL = {"roe": 0.15, "debt": 100, "peg": 1.8, "cr": 1.5, "npm": 0.10, "pb_target": 2.5}
+
+# Adjustment Multipliers based on Market Cap (Higher multiplier = higher standard)
+# These caps are based on typical Indian market classification (approximate)
+MCAP_THRESHOLDS = {
+    "Large Cap": {"min": 500000000000, "mult": 1.15}, # 5 Lakh Crore INR (Higher standards for quality)
+    "Mid Cap":   {"min": 20000000000,  "mult": 1.00}, # 20 Thousand Crore INR (Standard/Average standard)
+    "Small Cap": {"min": 0,            "mult": 0.85}  # (Lower standards, accepting higher risk/growth potential)
+}
+
+def classify_market_cap(mcap):
+    if mcap >= MCAP_THRESHOLDS["Large Cap"]["min"]:
+        return "Large Cap"
+    elif mcap >= MCAP_THRESHOLDS["Mid Cap"]["min"]:
+        return "Mid Cap"
+    else:
+        return "Small Cap"
 
 def normalize_sector(sector):
     if not sector: return "DEFAULT"
@@ -87,35 +104,39 @@ def fetch_fundamentals(symbol):
     try:
         ticker = yf.Ticker(f"{symbol}.NS")
         info = ticker.info
-        bs = ticker.balance_sheet
-        cf = ticker.cashflow
         
-        # Calculate Current Ratio manually (yfinance sometimes misses it)
-        if 'Current Assets' in bs.index and 'Current Liabilities' in bs.index and not bs.empty:
-            current_assets = bs.loc['Current Assets'].iloc[0]
-            current_liabilities = bs.loc['Current Liabilities'].iloc[0]
-            if current_liabilities > 0:
-                info['currentRatio'] = current_assets / current_liabilities
-            else:
-                info['currentRatio'] = 999
-        
-        # Calculate Free Cash Flow (FCF) Margin
-        if 'Operating Cash Flow' in cf.index and 'Capital Expenditure' in cf.index and 'Total Revenue' in info and not cf.empty:
-            fcf = cf.loc['Operating Cash Flow'].iloc[0] + cf.loc['Capital Expenditure'].iloc[0] # Note: CapEx is usually negative in yfinance data
-            revenue = info['totalRevenue']
-            info['fcfMargin'] = fcf / revenue
+        # Check for necessary financial data existence before fetching
+        bs_exists = 'Current Assets' in ticker.balance_sheet.index
+        cf_exists = 'Operating Cash Flow' in ticker.cashflow.index
+
+        # Calculate Current Ratio, FCF Margin, and Debt Trend
+        if bs_exists and cf_exists:
+            bs = ticker.balance_sheet
+            cf = ticker.cashflow
             
-        # Infer Debt Trend (Simplified check for long-term analysis)
-        if 'Total Debt' in bs.index and len(bs.columns) >= 2:
-            current_debt = bs.loc['Total Debt'].iloc[0]
-            prev_debt = bs.loc['Total Debt'].iloc[1]
-            info['debtTrend'] = 'reducing' if current_debt < prev_debt else 'increasing'
+            # Current Ratio
+            current_assets = bs.loc['Current Assets'].iloc[0] if 'Current Assets' in bs.index else 0
+            current_liabilities = bs.loc['Current Liabilities'].iloc[0] if 'Current Liabilities' in bs.index else 0
+            info['currentRatio'] = current_assets / current_liabilities if current_liabilities > 0 else 999
+            
+            # FCF Margin
+            op_cf = cf.loc['Operating Cash Flow'].iloc[0] if 'Operating Cash Flow' in cf.index else 0
+            cap_ex = cf.loc['Capital Expenditure'].iloc[0] if 'Capital Expenditure' in cf.index else 0
+            revenue = info.get('totalRevenue', 1)
+            fcf = op_cf + cap_ex # CapEx is usually negative in yfinance
+            info['fcfMargin'] = fcf / revenue if revenue > 0 else 0
+                
+            # Debt Trend
+            if 'Total Debt' in bs.index and len(bs.columns) >= 2:
+                current_debt = bs.loc['Total Debt'].iloc[0]
+                prev_debt = bs.loc['Total Debt'].iloc[1]
+                info['debtTrend'] = 'reducing' if current_debt < prev_debt else 'increasing'
             
         return info
 
     except Exception as e:
-        st.warning(f"Could not fetch full fundamental details: {e}")
-        return {}
+        # st.warning(f"Could not fetch full fundamental details: {e}")
+        return info
 
 def fetch_news(q):
     encoded_q = urllib.parse.quote(q)
@@ -132,37 +153,42 @@ def run_analysis(symbol):
 
     info = fetch_fundamentals(symbol)
     
-    # Check if fundamentals are available
     if not info:
         st.error(f"Could not fetch fundamental data for {symbol}.")
         return
 
     sector = normalize_sector(info.get("sector"))
-    model = SECTOR_MODELS.get(sector, DEFAULT_MODEL)
+    
+    # 1. Determine Market Cap and Multiplier
+    mcap_value = info.get("marketCap", 0)
+    mcap_class = classify_market_cap(mcap_value)
+    mcap_mult = MCAP_THRESHOLDS[mcap_class]["mult"]
+    
+    # 2. Apply Dynamic Multiplier to Sector Model
+    base_model = SECTOR_MODELS.get(sector, DEFAULT_MODEL)
+    model = {
+        'roe': base_model['roe'] * mcap_mult,
+        'debt': base_model['debt'] / mcap_mult if base_model['debt'] != 9999 else 9999, # Tighten debt for large cap
+        'peg': base_model['peg'] * (1 / mcap_mult), # Lower PEG target for large cap
+        'cr': base_model['cr'] * mcap_mult,
+        'npm': base_model['npm'] * mcap_mult,
+        'pb_target': base_model['pb_target'] * (1 / mcap_mult)
+    }
+
     weights = HORIZON_WEIGHTS[horizon]
 
-    # ---- Technical Indicators ----
-    df["EMA20"] = ta.ema(df["Close"], 20)
-    df["EMA50"] = ta.ema(df["Close"], 50)
-    df["EMA200"] = ta.ema(df["Close"], 200)
-    df["RSI"] = ta.rsi(df["Close"], 14)
-    macd = ta.macd(df["Close"])
-    df = pd.concat([df, macd], axis=1)
+    # ---- Technical Indicators (Calculated but not listed here for brevity) ----
+    df["EMA20"] = ta.ema(df["Close"], 20); df["EMA50"] = ta.ema(df["Close"], 50); df["EMA200"] = ta.ema(df["Close"], 200)
+    df["RSI"] = ta.rsi(df["Close"], 14); macd = ta.macd(df["Close"]); df = pd.concat([df, macd], axis=1)
 
     latest = df.iloc[-1]
-    price = latest["Close"]
-    prev = df.iloc[-2]
-    change = (price - prev["Close"]) / prev["Close"] * 100
+    price = latest["Close"]; prev = df.iloc[-2]; change = (price - prev["Close"]) / prev["Close"] * 100
     
-    tech_score = 0
-    fund_score = 0
-    max_tech = 8
-    max_fund = 14 # Increased max score for new checks
+    tech_score = 0; fund_score = 0; max_tech = 8; max_fund = 14
     pros, cons = [], []
 
     # ---- TECHNICAL SCORING (Same logic) ----
     if price > latest["EMA200"]: tech_score += 2; pros.append("Long-term Uptrend (>200 EMA)")
-    
     if horizon == "Short Term":
         if 40 < latest["RSI"] < 70: tech_score += 3; pros.append("RSI in Bullish Zone")
         if price > latest["EMA20"]: tech_score += 3; pros.append("Strong Short-term Momentum (>20 EMA)")
@@ -174,74 +200,44 @@ def run_analysis(symbol):
         if latest["EMA50"] > latest["EMA200"]: tech_score += 3; pros.append("Golden Cross (50 > 200 EMA)")
         if latest["RSI"] < 45: tech_score += 3; pros.append("RSI Attractive for Accumulation")
     
-    # ---- EXPANDED FUNDAMENTAL SCORING ----
-    
-    # Retrieve all metrics safely, defaulting to None/0
-    roe = info.get("returnOnEquity", 0)
-    debt = info.get("debtToEquity", 9999) 
-    peg = info.get("pegRatio", np.nan)
-    npm = info.get("profitMargins", 0) # Net Profit Margin
-    pb = info.get("priceToBook")
-    cr = info.get("currentRatio")
-    fcf_m = info.get("fcfMargin")
-    debt_trend = info.get("debtTrend", 'unknown')
+    # ---- FUNDAMENTAL SCORING (Dynamic Targets) ----
+    roe = info.get("returnOnEquity", 0); debt = info.get("debtToEquity", 9999); peg = info.get("pegRatio", np.nan)
+    npm = info.get("profitMargins", 0); pb = info.get("priceToBook"); cr = info.get("currentRatio"); fcf_m = info.get("fcfMargin")
+    debt_trend = info.get("debtTrend", 'unknown'); rev_growth = info.get("revenueGrowth", 0)
 
     # 1. CORE PROFITABILITY (ROE & Net Margin)
-    if roe > model["roe"]:
-        fund_score += 2; pros.append(f"High ROE ({round(roe*100,1)}%)")
-    else:
-        cons.append(f"Below target ROE ({round(roe*100,1)}%)")
+    if roe > model["roe"]: fund_score += 2; pros.append(f"High ROE ({round(roe*100,1)}%) vs. {mcap_class} target")
+    else: cons.append(f"Below target ROE ({round(roe*100,1)}%)")
     
-    if npm > model["npm"]:
-        fund_score += 2; pros.append("Healthy Net Profit Margin")
-    else:
-        cons.append("Low Net Profit Margin")
+    if npm > model["npm"]: fund_score += 2; pros.append(f"Healthy Net Profit Margin ({round(npm*100,1)}%)")
+    else: cons.append(f"Low Net Profit Margin ({round(npm*100,1)}%)")
         
     # 2. CAPITAL STRUCTURE & RISK (Debt & Debt Trend)
-    if debt < model["debt"]:
-        fund_score += 2; pros.append("Low Debt Level")
-    else:
-        cons.append("High Debt Level")
+    if debt < model["debt"]: fund_score += 2; pros.append("Low Debt Level")
+    else: cons.append("High Debt Level")
         
-    if debt_trend == 'reducing':
-        fund_score += 1; pros.append("Debt is being reduced (Positive Trend)")
-    elif debt_trend == 'increasing':
-        cons.append("Debt level is increasing (Negative Trend)")
+    if debt_trend == 'reducing': fund_score += 1; pros.append("Debt is being reduced (Positive Trend)")
+    elif debt_trend == 'increasing': cons.append("Debt level is increasing (Negative Trend)")
         
-    # 3. LIQUIDITY (Current Ratio)
-    # Banks are an exception, their liquidity is measured differently (P/B is key)
+    # 3. LIQUIDITY & BANK VALUATION (CR / PB)
     if sector != "Banks" and cr is not None:
-        if cr >= model["cr"]:
-            fund_score += 2; pros.append(f"Excellent Current Ratio ({round(cr, 2)})")
-        else:
-            cons.append(f"Low Current Ratio ({round(cr, 2)}) - Short-term risk")
+        if cr >= model["cr"]: fund_score += 2; pros.append(f"Excellent Current Ratio ({round(cr, 2)}) vs. {mcap_class} target")
+        else: cons.append(f"Low Current Ratio ({round(cr, 2)}) - Short-term risk")
     elif sector == "Banks":
-        # P/B is the core "asset quality" check for financials
         if pb is not None and pb < model["pb_target"]:
-             fund_score += 3; pros.append(f"Undervalued by Price/Book ({round(pb,2)})")
-        else:
-             cons.append(f"P/B ({round(pb,2)}) near or above sector norm")
+             fund_score += 3; pros.append(f"Undervalued by Price/Book ({round(pb,2)}) vs. {mcap_class} target")
+        else: cons.append(f"P/B ({round(pb,2)}) near or above sector norm")
     
     # 4. GROWTH & EFFICIENCY (PEG & FCF)
-    
-    # PEG Check (General Sector Valuation)
     if not pd.isna(peg):
-        if peg < model["peg"]:
-            fund_score += 1; pros.append(f"PEG ({round(peg,2)}) cheaper than sector")
-        else:
-            cons.append(f"PEG ({round(peg,2)}) expensive vs sector")
+        if peg < model["peg"]: fund_score += 1; pros.append(f"PEG ({round(peg,2)}) cheaper than {mcap_class} norm")
+        else: cons.append(f"PEG ({round(peg,2)}) expensive vs {mcap_class} norm")
 
-    # Free Cash Flow (FCF) Check - The highest quality signal for profitability
     if fcf_m is not None:
-        if fcf_m > 0.05: # High quality companies usually have FCF margin > 5%
-            fund_score += 3; pros.append(f"Strong Free Cash Flow Margin ({round(fcf_m*100,1)}%)")
-        else:
-            cons.append("Weak or Negative Free Cash Flow")
+        if fcf_m > 0.05: fund_score += 3; pros.append(f"Strong Free Cash Flow Margin ({round(fcf_m*100,1)}%)")
+        else: cons.append("Weak or Negative Free Cash Flow")
             
-    # 5. Revenue Growth
-    rev_growth = info.get("revenueGrowth", 0)
-    if rev_growth > 0.15: # >15% growth
-        fund_score += 1; pros.append(f"High Revenue Growth ({round(rev_growth*100,1)}%)")
+    if rev_growth > 0.15: fund_score += 1; pros.append(f"High Revenue Growth ({round(rev_growth*100,1)}%)")
 
     
     # ---- FINAL CALCULATION ----
@@ -254,7 +250,7 @@ def run_analysis(symbol):
 
     # ================= UI RENDERING =================
     st.subheader(f"{symbol} - {company_name}")
-    st.caption(f"Sector: {sector} | Horizon: {horizon} | Strategy: {int(weights['tech']*100)}% Tech / {int(weights['fund']*100)}% Fund")
+    st.caption(f"Sector: {sector} | **{mcap_class}** | Horizon: {horizon} | Strategy: {int(weights['tech']*100)}% Tech / {int(weights['fund']*100)}% Fund")
     
     c1, c2, c3 = st.columns(3)
     c1.metric("Current Price", f"₹{round(price,2)}", f"{round(change,2)}%")
@@ -310,3 +306,4 @@ def run_analysis(symbol):
 # ================= RUN =================
 if st.button("🚀 Run Analysis", type="primary"):
     run_analysis(symbol)
+
