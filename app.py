@@ -71,13 +71,9 @@ tf_label = st.sidebar.selectbox("Chart View Range", list(timeframe_map.keys()))
 @st.cache_data(ttl=3600)
 def fetch_price_data_nse(symbol):
     try:
-        # Fetching 1 Year of data for calculation (Using '1Y' string as approx)
-        # nselib requires specific dates or period strings. 
-        # We fetch 1Y to ensure enough data for EMA200 calculation.
         end_date = datetime.datetime.now().strftime("%d-%m-%Y")
         start_date = (datetime.datetime.now() - datetime.timedelta(days=400)).strftime("%d-%m-%Y")
         
-        # Use nselib to get official data
         data = capital_market.price_volume_and_deliverable_position_data(symbol=symbol, from_date=start_date, to_date=end_date)
         
         # Clean and Format Data
@@ -85,12 +81,10 @@ def fetch_price_data_nse(symbol):
         data = data.sort_values('Date')
         data.set_index('Date', inplace=True)
         
-        # Convert columns to numeric (remove commas if any)
         cols = ['OpenPrice', 'HighPrice', 'LowPrice', 'ClosePrice', 'TotalTradedQuantity']
         for col in cols:
             data[col] = pd.to_numeric(data[col].astype(str).str.replace(',', ''), errors='coerce')
             
-        # Rename to standard names for analysis
         data = data.rename(columns={
             'OpenPrice': 'Open',
             'HighPrice': 'High', 
@@ -103,14 +97,20 @@ def fetch_price_data_nse(symbol):
     except Exception as e:
         return pd.DataFrame()
 
-# Fallback/Fundamental Data (Yahoo)
+# FIXED: Fetch and return DICTIONARIES/DATAFRAMES, not the Ticker object
 @st.cache_data(ttl=3600)
-def fetch_fundamentals(symbol):
-    # Yahoo requires .NS extension
-    stock = yf.Ticker(f"{symbol}.NS")
-    return stock
+def fetch_yahoo_details(symbol):
+    try:
+        stock = yf.Ticker(f"{symbol}.NS")
+        # Extract the data we need immediately
+        info = stock.info
+        major = stock.major_holders
+        inst = stock.institutional_holders
+        return info, major, inst
+    except Exception as e:
+        # Return empty data structures on failure
+        return {}, None, None
 
-# Google News Fetcher
 def fetch_google_news(query):
     clean_query = query.replace(" ", "%20")
     rss_url = f"https://news.google.com/rss/search?q={clean_query}%20stock%20news%20India&hl=en-IN&gl=IN&ceid=IN:en"
@@ -128,9 +128,8 @@ def run_analysis(symbol):
         st.error(f"Could not fetch official NSE data for {symbol}. Try again later or check symbol.")
         return
 
-    # 2. Fetch Fundamentals (Yahoo)
-    stock_fund = fetch_fundamentals(symbol)
-    info = stock_fund.info
+    # 2. Fetch Fundamentals (Yahoo) - FIXED Call
+    info, major_holders, inst_holders = fetch_yahoo_details(symbol)
 
     # 3. Indicators
     df_full["EMA20"] = ta.ema(df_full["Close"], length=20)
@@ -145,27 +144,26 @@ def run_analysis(symbol):
     ema50 = latest["EMA50"]
     ema200 = latest["EMA200"]
 
-    # 4. Scoring & Pros/Cons Logic
+    # 4. Scoring Logic
     tech_score = 0
     fund_score = 0
     pros = []
     cons = []
 
-    # --- Technical Analysis ---
+    # --- Technical ---
     if horizon == "Short Term":
         if price > ema20:
             tech_score += 2
-            pros.append("Price > 20 EMA (Short-term Bullish trend)")
+            pros.append("Price > 20 EMA (Short-term Bullish)")
         else:
-            cons.append("Price < 20 EMA (Short-term Bearish trend)")
-            
+            cons.append("Price < 20 EMA (Short-term Bearish)")
         if 50 < rsi < 70:
             tech_score += 2
-            pros.append(f"RSI is {round(rsi,1)} (Healthy Momentum)")
+            pros.append(f"RSI is {round(rsi,1)} (Healthy)")
         elif rsi >= 70:
-            cons.append(f"RSI is {round(rsi,1)} (Overbought - High Risk)")
+            cons.append(f"RSI is {round(rsi,1)} (Overbought)")
         else:
-            cons.append(f"RSI is {round(rsi,1)} (Weak Momentum)")
+            cons.append(f"RSI is {round(rsi,1)} (Weak)")
 
     elif horizon == "Medium Term":
         if price > ema50:
@@ -173,7 +171,6 @@ def run_analysis(symbol):
             pros.append("Price > 50 EMA (Medium-term Bullish)")
         else:
             cons.append("Price < 50 EMA (Medium-term Bearish)")
-        
         if ema50 > ema200:
             tech_score += 2
             pros.append("Golden Cross (50 EMA > 200 EMA)")
@@ -186,12 +183,10 @@ def run_analysis(symbol):
             pros.append("Price > 200 EMA (Long-term Bullish)")
         else:
             cons.append("Price < 200 EMA (Long-term Bearish)")
-            
         if rsi < 70:
             tech_score += 1
 
-    # --- Fundamental Analysis ---
-    # Note: Using default values carefully to avoid false positives
+    # --- Fundamental ---
     roe = info.get("returnOnEquity", 0)
     debt_eq = info.get("debtToEquity", 1000) 
     peg = info.get("pegRatio", 5) 
@@ -200,7 +195,7 @@ def run_analysis(symbol):
         fund_score += 2
         pros.append(f"Strong ROE: {round(roe*100, 2)}%")
     else:
-        cons.append(f"Low ROE: {round(roe*100, 2)}% (Target > 15%)")
+        cons.append(f"Low ROE: {round(roe*100, 2)}%")
     
     if debt_eq < 100: 
         fund_score += 2
@@ -210,11 +205,11 @@ def run_analysis(symbol):
     
     if peg < 1.5: 
         fund_score += 3
-        pros.append(f"Undervalued (PEG Ratio: {peg})")
+        pros.append(f"Undervalued (PEG: {peg})")
     elif peg > 3:
-        cons.append(f"Overvalued (PEG Ratio: {peg})")
+        cons.append(f"Overvalued (PEG: {peg})")
 
-    # Final Calculation
+    # Score Calc
     final_score = (tech_score * tech_weight) + (fund_score * fund_weight)
     max_score = (4 * tech_weight) + (7 * fund_weight)
     normalized_score = (final_score / max_score) * 10
@@ -225,7 +220,6 @@ def run_analysis(symbol):
 
     # ================= UI LAYOUT =================
 
-    # --- Header ---
     c1, c2, c3 = st.columns([2, 1, 1])
     with c1:
         st.subheader(f"{symbol}")
@@ -237,28 +231,20 @@ def run_analysis(symbol):
     with c3:
         st.metric("Algo Score", f"{round(normalized_score, 1)} / 10", verdict)
 
-    # --- Pros & Cons ---
     col_p, col_c = st.columns(2)
     with col_p:
-        st.success("✅ POSITIVES (Pros)")
-        if pros:
-            for p in pros: st.write(f"• {p}")
-        else:
-            st.write("No major positive signals detected.")
-            
+        st.success("✅ POSITIVES")
+        for p in pros: st.write(f"• {p}")
+        if not pros: st.write("None")
     with col_c:
-        st.error("❌ NEGATIVES (Cons)")
-        if cons:
-            for c in cons: st.write(f"• {c}")
-        else:
-            st.write("No major negative signals detected.")
+        st.error("❌ NEGATIVES")
+        for c in cons: st.write(f"• {c}")
+        if not cons: st.write("None")
 
     st.markdown("---")
 
-    # --- Chart Section ---
+    # --- Chart ---
     st.subheader(f"📈 {chart_type} Chart (Official NSE)")
-    
-    # Filter for view
     view_days = 30 if tf_label == "1 Month" else 180 if tf_label == "6 Months" else 365
     chart_df = df_full.tail(view_days)
 
@@ -283,7 +269,31 @@ def run_analysis(symbol):
     fig.update_layout(height=600, xaxis_rangeslider_visible=False, template="plotly_dark", margin=dict(l=0, r=0, t=0, b=0), legend=dict(orientation="h", y=1.02))
     st.plotly_chart(fig, use_container_width=True)
 
-    # --- News Section ---
+    # --- Shareholding ---
+    st.markdown("### 👥 Shareholding Pattern")
+    sh_col1, sh_col2 = st.columns(2)
+    with sh_col1:
+        try:
+            if major_holders is not None and not major_holders.empty:
+                major_holders.columns = ["Percentage", "Holder"]
+                st.dataframe(major_holders, hide_index=True, use_container_width=True)
+            else:
+                st.info("Major holder data unavailable.")
+        except: st.info("Data unavailable.")
+
+    with sh_col2:
+        try:
+            if inst_holders is not None and not inst_holders.empty:
+                inst_clean = inst_holders[["Holder", "Shares", "Date Reported", "% Out"]].copy()
+                inst_clean.columns = ["Institution Name", "Shares", "Date", "% Holding"]
+                inst_clean["% Holding"] = (inst_clean["% Holding"] * 100).round(2).astype(str) + "%"
+                inst_clean["Date"] = pd.to_datetime(inst_clean["Date"]).dt.date
+                st.dataframe(inst_clean, hide_index=True, use_container_width=True)
+            else:
+                st.info("Institutional data unavailable.")
+        except: st.info("Institutional data unavailable.")
+
+    # --- News ---
     st.markdown("### 📰 Latest News")
     try:
         search_term = company_name if company_name else symbol
@@ -298,7 +308,7 @@ def run_analysis(symbol):
     except:
         st.error("Error fetching news.")
 
-    # --- PDF Report ---
+    # --- PDF ---
     if st.button("📄 Generate PDF Report"):
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as f:
             c = canvas.Canvas(f.name, pagesize=A4)
