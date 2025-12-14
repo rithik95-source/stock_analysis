@@ -71,11 +71,15 @@ tf_label = st.sidebar.selectbox("Chart View Range", list(timeframe_map.keys()))
 @st.cache_data(ttl=3600)
 def fetch_price_data_nse(symbol):
     try:
+        # Fetching 1.5 Years to ensure enough data for EMA200
         end_date = datetime.datetime.now().strftime("%d-%m-%Y")
-        start_date = (datetime.datetime.now() - datetime.timedelta(days=400)).strftime("%d-%m-%Y")
+        start_date = (datetime.datetime.now() - datetime.timedelta(days=500)).strftime("%d-%m-%Y")
         
         data = capital_market.price_volume_and_deliverable_position_data(symbol=symbol, from_date=start_date, to_date=end_date)
         
+        if data is None or data.empty:
+            return pd.DataFrame()
+
         # Clean and Format Data
         data['Date'] = pd.to_datetime(data['Date'], format='%d-%b-%Y')
         data = data.sort_values('Date')
@@ -83,6 +87,7 @@ def fetch_price_data_nse(symbol):
         
         cols = ['OpenPrice', 'HighPrice', 'LowPrice', 'ClosePrice', 'TotalTradedQuantity']
         for col in cols:
+            # Remove commas and convert to numeric, forcing errors to NaN
             data[col] = pd.to_numeric(data[col].astype(str).str.replace(',', ''), errors='coerce')
             
         data = data.rename(columns={
@@ -93,45 +98,50 @@ def fetch_price_data_nse(symbol):
             'TotalTradedQuantity': 'Volume'
         })
         
+        # Drop rows with missing price data
+        data.dropna(subset=['Close'], inplace=True)
+        
         return data
     except Exception as e:
         return pd.DataFrame()
 
-# FIXED: Fetch and return DICTIONARIES/DATAFRAMES, not the Ticker object
 @st.cache_data(ttl=3600)
 def fetch_yahoo_details(symbol):
     try:
         stock = yf.Ticker(f"{symbol}.NS")
-        # Extract the data we need immediately
         info = stock.info
         major = stock.major_holders
         inst = stock.institutional_holders
         return info, major, inst
     except Exception as e:
-        # Return empty data structures on failure
         return {}, None, None
 
 def fetch_google_news(query):
-    clean_query = query.replace(" ", "%20")
-    rss_url = f"https://news.google.com/rss/search?q={clean_query}%20stock%20news%20India&hl=en-IN&gl=IN&ceid=IN:en"
-    return feedparser.parse(rss_url)
+    try:
+        clean_query = query.replace(" ", "%20")
+        rss_url = f"https://news.google.com/rss/search?q={clean_query}%20stock%20news%20India&hl=en-IN&gl=IN&ceid=IN:en"
+        return feedparser.parse(rss_url)
+    except:
+        return None
 
 # ================= ANALYSIS ENGINE =================
 
 def run_analysis(symbol):
     
-    # 1. Fetch Price Data (Official NSE)
+    # 1. Fetch Price Data
     with st.spinner('Fetching Official NSE Data...'):
         df_full = fetch_price_data_nse(symbol)
     
     if df_full.empty:
-        st.error(f"Could not fetch official NSE data for {symbol}. Try again later or check symbol.")
+        st.error(f"Could not fetch data for {symbol}. It might be delisted, suspended, or the NSE server is busy.")
         return
 
-    # 2. Fetch Fundamentals (Yahoo) - FIXED Call
+    # 2. Fetch Fundamentals
     info, major_holders, inst_holders = fetch_yahoo_details(symbol)
 
     # 3. Indicators
+    # We use min_periods to ensure we get *some* values even if history is short, 
+    # but EMA200 will still be NaN if rows < 200
     df_full["EMA20"] = ta.ema(df_full["Close"], length=20)
     df_full["EMA50"] = ta.ema(df_full["Close"], length=50)
     df_full["EMA200"] = ta.ema(df_full["Close"], length=200)
@@ -139,74 +149,85 @@ def run_analysis(symbol):
 
     latest = df_full.iloc[-1]
     price = latest["Close"]
-    rsi = latest["RSI"]
-    ema20 = latest["EMA20"]
-    ema50 = latest["EMA50"]
-    ema200 = latest["EMA200"]
+    
+    # Safely get indicators (handle missing data)
+    rsi = latest["RSI"] if pd.notna(latest["RSI"]) else None
+    ema20 = latest["EMA20"] if pd.notna(latest["EMA20"]) else None
+    ema50 = latest["EMA50"] if pd.notna(latest["EMA50"]) else None
+    ema200 = latest["EMA200"] if pd.notna(latest["EMA200"]) else None
 
-    # 4. Scoring Logic
+    # 4. Scoring Logic (With Safety Checks)
     tech_score = 0
     fund_score = 0
     pros = []
     cons = []
 
-    # --- Technical ---
+    # --- Technical Analysis ---
     if horizon == "Short Term":
-        if price > ema20:
+        if ema20 and price > ema20:
             tech_score += 2
             pros.append("Price > 20 EMA (Short-term Bullish)")
-        else:
+        elif ema20:
             cons.append("Price < 20 EMA (Short-term Bearish)")
-        if 50 < rsi < 70:
-            tech_score += 2
-            pros.append(f"RSI is {round(rsi,1)} (Healthy)")
-        elif rsi >= 70:
-            cons.append(f"RSI is {round(rsi,1)} (Overbought)")
+            
+        if rsi:
+            if 50 < rsi < 70:
+                tech_score += 2
+                pros.append(f"RSI is {round(rsi,1)} (Healthy)")
+            elif rsi >= 70:
+                cons.append(f"RSI is {round(rsi,1)} (Overbought)")
+            else:
+                cons.append(f"RSI is {round(rsi,1)} (Weak)")
         else:
-            cons.append(f"RSI is {round(rsi,1)} (Weak)")
+            cons.append("Not enough data for RSI")
 
     elif horizon == "Medium Term":
-        if price > ema50:
+        if ema50 and price > ema50:
             tech_score += 2
             pros.append("Price > 50 EMA (Medium-term Bullish)")
-        else:
+        elif ema50:
             cons.append("Price < 50 EMA (Medium-term Bearish)")
-        if ema50 > ema200:
-            tech_score += 2
-            pros.append("Golden Cross (50 EMA > 200 EMA)")
-        else:
-            cons.append("Death Cross (50 EMA < 200 EMA)")
+        
+        if ema50 and ema200:
+            if ema50 > ema200:
+                tech_score += 2
+                pros.append("Golden Cross (50 EMA > 200 EMA)")
+            else:
+                cons.append("Death Cross (50 EMA < 200 EMA)")
 
     else:  # Long Term
-        if price > ema200:
+        if ema200 and price > ema200:
             tech_score += 3
             pros.append("Price > 200 EMA (Long-term Bullish)")
-        else:
+        elif ema200:
             cons.append("Price < 200 EMA (Long-term Bearish)")
-        if rsi < 70:
+        else:
+            cons.append("Insufficient history for 200 EMA")
+            
+        if rsi and rsi < 70:
             tech_score += 1
 
-    # --- Fundamental ---
+    # --- Fundamental Analysis ---
     roe = info.get("returnOnEquity", 0)
     debt_eq = info.get("debtToEquity", 1000) 
     peg = info.get("pegRatio", 5) 
 
-    if roe > 0.15: 
+    if roe and roe > 0.15: 
         fund_score += 2
         pros.append(f"Strong ROE: {round(roe*100, 2)}%")
     else:
         cons.append(f"Low ROE: {round(roe*100, 2)}%")
     
-    if debt_eq < 100: 
+    if debt_eq and debt_eq < 100: 
         fund_score += 2
         pros.append("Low Debt-to-Equity Ratio")
     else:
         cons.append("High Debt-to-Equity Ratio")
     
-    if peg < 1.5: 
+    if peg and peg < 1.5: 
         fund_score += 3
         pros.append(f"Undervalued (PEG: {peg})")
-    elif peg > 3:
+    elif peg and peg > 3:
         cons.append(f"Overvalued (PEG: {peg})")
 
     # Score Calc
@@ -261,9 +282,14 @@ def run_analysis(symbol):
                         mode='lines', name='Close Price',
                         line=dict(color='#00ff00', width=2)), row=1, col=1)
 
-    fig.add_trace(go.Scatter(x=chart_df.index, y=chart_df['EMA20'], line=dict(color='blue', width=1), name='EMA 20'), row=1, col=1)
-    fig.add_trace(go.Scatter(x=chart_df.index, y=chart_df['EMA50'], line=dict(color='orange', width=1), name='EMA 50'), row=1, col=1)
-    fig.add_trace(go.Scatter(x=chart_df.index, y=chart_df['EMA200'], line=dict(color='red', width=2), name='EMA 200'), row=1, col=1)
+    # Plot indicators only if they exist in the sliced dataframe
+    if 'EMA20' in chart_df.columns:
+        fig.add_trace(go.Scatter(x=chart_df.index, y=chart_df['EMA20'], line=dict(color='blue', width=1), name='EMA 20'), row=1, col=1)
+    if 'EMA50' in chart_df.columns:
+        fig.add_trace(go.Scatter(x=chart_df.index, y=chart_df['EMA50'], line=dict(color='orange', width=1), name='EMA 50'), row=1, col=1)
+    if 'EMA200' in chart_df.columns:
+        fig.add_trace(go.Scatter(x=chart_df.index, y=chart_df['EMA200'], line=dict(color='red', width=2), name='EMA 200'), row=1, col=1)
+    
     fig.add_trace(go.Bar(x=chart_df.index, y=chart_df['Volume'], marker_color='lightblue', name='Volume'), row=2, col=1)
 
     fig.update_layout(height=600, xaxis_rangeslider_visible=False, template="plotly_dark", margin=dict(l=0, r=0, t=0, b=0), legend=dict(orientation="h", y=1.02))
@@ -298,7 +324,7 @@ def run_analysis(symbol):
     try:
         search_term = company_name if company_name else symbol
         feed = fetch_google_news(search_term)
-        if feed.entries:
+        if feed and feed.entries:
             for entry in feed.entries[:5]:
                 with st.expander(f"{entry.title}"):
                     st.caption(f"Source: {entry.source.title} | {entry.published}")
