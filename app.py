@@ -27,7 +27,7 @@ def load_nse_list():
         df["display"] = df["SYMBOL"] + " – " + df["NAME OF COMPANY"]
         return df[["symbol", "display"]]
     except Exception as e:
-        st.error(f"Error loading stock list: {e}")
+        # Fallback if NSE server is busy
         return pd.DataFrame(columns=["symbol", "display"])
 
 nse_df = load_nse_list()
@@ -65,34 +65,37 @@ timeframe_map = {
 }
 tf_label = st.sidebar.selectbox("Chart View Range", list(timeframe_map.keys()))
 
-# ================= DATA FETCH =================
+# ================= DATA FETCH (FIXED) =================
 
 @st.cache_data(ttl=3600)
 def fetch_stock_data(symbol):
+    # We ONLY return the DataFrame here to avoid caching errors
     stock = yf.Ticker(symbol)
-    # Fetch ample history to ensure EMA200 can be calculated regardless of view
     df = stock.history(period="max")
-    return df, stock
+    return df
 
 # ================= ANALYSIS ENGINE =================
 
 def run_analysis(symbol):
     
-    # 1. Fetch Full Data
-    df_full, stock = fetch_stock_data(symbol)
+    # 1. Fetch Full Data (Cached)
+    df_full = fetch_stock_data(symbol)
+    
+    # Re-initialize Ticker here (Fast operation, safe to run every time)
+    stock = yf.Ticker(symbol)
 
     if df_full.empty:
         st.error(f"No price data available for {symbol}")
         return
 
-    # 2. Calculate Indicators on FULL Data (Critical for accuracy)
-    # Using pandas_ta to calculate EMAs and RSI on the entire history
+    # 2. Calculate Indicators on FULL Data
+    # Ensure indices are aligned
     df_full["EMA20"] = ta.ema(df_full["Close"], length=20)
     df_full["EMA50"] = ta.ema(df_full["Close"], length=50)
     df_full["EMA200"] = ta.ema(df_full["Close"], length=200)
     df_full["RSI"] = ta.rsi(df_full["Close"], length=14)
 
-    # Get the very latest values for Scoring
+    # Get the latest values for Scoring
     latest = df_full.iloc[-1]
     price = latest["Close"]
     rsi = latest["RSI"]
@@ -107,29 +110,26 @@ def run_analysis(symbol):
         if 50 < rsi < 70: tech_score += 2
     elif horizon == "Medium Term":
         if price > ema50: tech_score += 2
-        if ema50 > ema200: tech_score += 2 # Golden Cross condition
+        if ema50 > ema200: tech_score += 2
     else:  # Long Term
         if price > ema200: tech_score += 3
-        # Bonus for RSI not being overbought in long term
         if rsi < 70: tech_score += 1
 
     # 4. Calculate Fundamental Score
     info = stock.info
     fund_score = 0
     
-    # Fundamental checks with safe gets
     roe = info.get("returnOnEquity", 0)
-    debt_eq = info.get("debtToEquity", 1000) # Default high if missing
-    peg = info.get("pegRatio", 5) # Default high if missing
+    debt_eq = info.get("debtToEquity", 1000) 
+    peg = info.get("pegRatio", 5) 
     
     if roe > 0.15: fund_score += 2
-    if debt_eq < 100: fund_score += 2 # yfinance returns debtToEquity as %, so < 100 is < 1.0 ratio
+    if debt_eq < 100: fund_score += 2 
     if peg < 1.5: fund_score += 3
 
     # 5. Final Verdict
     final_score = (tech_score * tech_weight) + (fund_score * fund_weight)
-    
-    max_score = (4 * tech_weight) + (7 * fund_weight) # Approximation of max possible
+    max_score = (4 * tech_weight) + (7 * fund_weight)
     normalized_score = (final_score / max_score) * 10
     
     if normalized_score >= 7: verdict = "🟢 BUY"
@@ -144,7 +144,9 @@ def run_analysis(symbol):
         st.subheader(f"{symbol.replace('.NS', '')}")
         st.caption(f"Sector: {info.get('sector', 'N/A')} | Industry: {info.get('industry', 'N/A')}")
     with c2:
-        st.metric("Current Price", f"₹{round(price, 2)}", f"{round(((price - df_full['Close'].iloc[-2])/df_full['Close'].iloc[-2])*100, 2)}%")
+        prev_close = df_full['Close'].iloc[-2]
+        change = ((price - prev_close) / prev_close) * 100
+        st.metric("Current Price", f"₹{round(price, 2)}", f"{round(change, 2)}%")
     with c3:
         st.metric("Algo Score", f"{round(normalized_score, 1)} / 10", verdict)
 
@@ -153,14 +155,12 @@ def run_analysis(symbol):
     # --- Chart Section (Plotly) ---
     st.subheader("📈 Technical Chart")
     
-    # Slice data for Chart View ONLY
     lookback = timeframe_map[tf_label]
     if lookback:
         chart_df = df_full.tail(lookback)
     else:
         chart_df = df_full
 
-    # Create Plotly Candlestick Chart
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
                         vertical_spacing=0.05, row_heights=[0.7, 0.3])
 
@@ -186,7 +186,8 @@ def run_analysis(symbol):
         height=600, 
         xaxis_rangeslider_visible=False,
         template="plotly_dark",
-        margin=dict(l=0, r=0, t=0, b=0)
+        margin=dict(l=0, r=0, t=0, b=0),
+        legend=dict(orientation="h", y=1.02, yanchor="bottom", x=0, xanchor="left")
     )
     
     st.plotly_chart(fig, use_container_width=True)
@@ -201,10 +202,7 @@ def run_analysis(symbol):
         try:
             major = stock.major_holders
             if major is not None and not major.empty:
-                # Cleaning Yahoo Finance Data
-                # Typically columns are [0, 1] -> [Percentage, Description]
                 major.columns = ["Percentage", "Holder"]
-                # Convert descriptive strings to cleaner format if needed
                 st.dataframe(major, hide_index=True, use_container_width=True)
             else:
                 st.info("Major holder data unavailable.")
@@ -216,19 +214,15 @@ def run_analysis(symbol):
         try:
             inst = stock.institutional_holders
             if inst is not None and not inst.empty:
-                # Select relevant columns and rename
                 inst_clean = inst[["Holder", "Shares", "Date Reported", "% Out"]].copy()
                 inst_clean.columns = ["Institution Name", "Shares", "Date", "% Holding"]
-                
-                # Format Percentage
                 inst_clean["% Holding"] = (inst_clean["% Holding"] * 100).round(2).astype(str) + "%"
                 inst_clean["Date"] = pd.to_datetime(inst_clean["Date"]).dt.date
-                
                 st.dataframe(inst_clean, hide_index=True, use_container_width=True)
             else:
-                st.warning("No Institutional Holders found for this stock.")
-        except Exception as e:
-            st.info(f"Could not fetch institutional data. {e}")
+                st.warning("No Institutional Holders found.")
+        except:
+            st.info("Institutional data unavailable.")
 
     # --- News Section ---
     st.markdown("### 📰 Latest News")
@@ -236,41 +230,34 @@ def run_analysis(symbol):
     try:
         news_list = stock.news
         if news_list:
-            for i, article in enumerate(news_list[:5]):
-                with st.expander(f"{article.get('title', 'No Title')} - {article.get('publisher', 'Unknown')}"):
-                    # Format timestamp
+            for article in news_list[:5]:
+                with st.expander(f"{article.get('title', 'No Title')}"):
                     if 'providerPublishTime' in article:
                         pub_date = datetime.datetime.fromtimestamp(article['providerPublishTime']).strftime('%Y-%m-%d %H:%M')
-                        st.caption(f"Published: {pub_date}")
+                        st.caption(f"Source: {article.get('publisher', 'Unknown')} | {pub_date}")
                     
-                    st.write(f"[Read Full Article]({article['link']})")
-                    # Check for thumbnail
-                    if 'thumbnail' in article and 'resolutions' in article['thumbnail']:
-                        try:
-                            img_url = article['thumbnail']['resolutions'][0]['url']
-                            st.image(img_url, width=200)
-                        except:
-                            pass
+                    col_txt, col_img = st.columns([3, 1])
+                    with col_txt:
+                        st.write(f"[Read Full Article]({article['link']})")
+                    with col_img:
+                        if 'thumbnail' in article and 'resolutions' in article['thumbnail']:
+                            st.image(article['thumbnail']['resolutions'][0]['url'], use_column_width=True)
         else:
             st.info("No news articles found.")
-    except Exception as e:
-        st.error(f"Error fetching news: {e}")
+    except:
+        st.info("News data unavailable.")
 
-    # --- PDF Report Generation ---
+    # --- PDF Report ---
     if st.button("📄 Generate PDF Report"):
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as f:
             c = canvas.Canvas(f.name, pagesize=A4)
-            y = 800
             c.setFont("Helvetica-Bold", 16)
-            c.drawString(40, y, f"Research Report: {symbol}")
-            y -= 30
+            c.drawString(40, 800, f"Research Report: {symbol}")
             c.setFont("Helvetica", 12)
-            c.drawString(40, y, f"Date: {datetime.datetime.now().strftime('%Y-%m-%d')}")
-            y -= 20
-            c.drawString(40, y, f"Price: {price} | Verdict: {verdict}")
-            y -= 20
-            c.drawString(40, y, f"Investment Horizon: {horizon}")
-            
+            c.drawString(40, 770, f"Date: {datetime.datetime.now().strftime('%Y-%m-%d')}")
+            c.drawString(40, 750, f"Price: Rs. {round(price, 2)}")
+            c.drawString(40, 730, f"Score: {round(normalized_score, 1)}/10")
+            c.drawString(40, 710, f"Verdict: {verdict}")
             c.save()
             st.success("PDF Generated!")
             st.download_button("Download PDF", open(f.name, "rb"), file_name=f"{symbol}_report.pdf")
@@ -279,4 +266,3 @@ def run_analysis(symbol):
 
 if st.button("🚀 Run Analysis", type="primary"):
     run_analysis(symbol)
-
