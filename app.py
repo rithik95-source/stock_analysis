@@ -2,16 +2,14 @@ import streamlit as st
 import plotly.express as px
 from streamlit_autorefresh import st_autorefresh
 from data_sources import fetch_comex, fetch_mcx_two_days
-from datetime import datetime
 
-# Page config must be the first Streamlit command
 st.set_page_config(page_title="Commodity Dashboard", layout="wide", page_icon="📊")
-st_autorefresh(interval=60000, key="refresh")
+st_autorefresh(interval=60000, key="refresh") # Auto-refresh every 60s
 
 st.title("📊 Commodity Pro Dashboard")
-st.sidebar.success("Select a page above for Stock Picks & News.")
+st.sidebar.success("Select a page above for Live Stock Picks & News.")
 
-# --- COMEX SECTION ---
+# --- COMEX ---
 st.subheader("🌍 COMEX Futures")
 commodities = [("Gold", "GC=F"), ("Silver", "SI=F"), ("Crude Oil", "CL=F"), ("Copper", "HG=F")]
 
@@ -33,11 +31,11 @@ for i in range(0, len(commodities), 2):
                 m2.metric("Day High", f"${d_high:.2f}")
                 m3.metric("Day Low", f"${d_low:.2f}")
                 
-                fig = px.line(today, x="Datetime", y="Close", height=200)
+                fig = px.line(today, x="Datetime", y="Close", height=230)
                 fig.update_layout(margin=dict(l=0, r=0, t=0, b=0))
                 st.plotly_chart(fig, use_container_width=True)
 
-# --- MCX SECTION ---
+# --- MCX ---
 st.divider()
 st.subheader("🇮🇳 MCX Futures")
 t_df, y_df = fetch_mcx_two_days()
@@ -53,3 +51,5 @@ if not t_df.empty:
                 c2.metric("Prev Close", f"₹{y_c:,.0f}")
                 c3.metric("High", f"₹{float(tr.iloc[0]['HIGH']):,.0f}")
                 c4.metric("Low", f"₹{float(tr.iloc[0]['LOW']):,.0f}")
+else:
+    st.warning("Searching for latest MCX Bhavcopy files...")
