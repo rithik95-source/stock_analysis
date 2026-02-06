@@ -36,4 +36,4 @@ for item in news:
             st.caption(f"📅 {datetime.fromtimestamp(item['provider_publish_time']).strftime('%Y-%m-%d %H:%M')}")
         with col2:
             st.markdown(f"**[{item['title']}]({item['link']})**")
-            st.write(f"Source: {item.get('publisher', 'Finance')}")
+            st.write(f"Source: {item.get('publisher', 'Finance News Source')}")
