@@ -4,101 +4,52 @@ from streamlit_autorefresh import st_autorefresh
 from data_sources import fetch_comex, fetch_mcx_two_days
 from datetime import datetime
 
-# =========================
-# Page config
-# =========================
-st.set_page_config(page_title="Commodity Dashboard", layout="wide")
-st_autorefresh(interval=60000, key="refresh") # Refresh every 60s to avoid rate limits
+# Page config must be the first Streamlit command
+st.set_page_config(page_title="Commodity Dashboard", layout="wide", page_icon="📊")
+st_autorefresh(interval=60000, key="refresh")
 
-st.title("📊 Commodity Dashboard")
+st.title("📊 Commodity Pro Dashboard")
+st.sidebar.success("Select a page above for Stock Picks & News.")
 
-# =========================
-# COMEX SECTION
-# =========================
-st.subheader("🌍 COMEX Futures (vs Prev. Close)")
-
-commodities = [
-    ("Gold", "GC=F"),
-    ("Silver", "SI=F"),
-    ("Copper", "HG=F"),
-    ("Crude Oil", "CL=F"),
-    ("Aluminium", "ALI=F"),
-    ("Zinc", "ZNC=F"),
-]
+# --- COMEX SECTION ---
+st.subheader("🌍 COMEX Futures")
+commodities = [("Gold", "GC=F"), ("Silver", "SI=F"), ("Crude Oil", "CL=F"), ("Copper", "HG=F")]
 
 for i in range(0, len(commodities), 2):
-    col1, col2 = st.columns(2)
-
-    for col, (name, symbol) in zip([col1, col2], commodities[i:i+2]):
+    cols = st.columns(2)
+    for col, (name, symbol) in zip(cols, commodities[i:i+2]):
         with col:
             df = fetch_comex(symbol)
-
-            if df.empty:
-                st.warning(f"{name} data unavailable")
-                continue
-
-            # Identify 'Today' and 'Yesterday' groups
-            df['Date'] = df['Datetime'].dt.date
-            unique_dates = sorted(df['Date'].unique())
-
-            if len(unique_dates) < 2:
-                # If only 1 day of data is available, compare to first row
-                ltp = df["Close"].iloc[-1]
-                prev_close = df["Close"].iloc[0]
-            else:
-                # Last price of the previous date in the data
-                yday_close = df[df['Date'] == unique_dates[-2]]["Close"].iloc[-1]
-                ltp = df["Close"].iloc[-1]
-                prev_close = yday_close
-
-            change = ltp - prev_close
-            pct = (change / prev_close) * 100
-
-            st.metric(
-                name,
-                f"{ltp:.2f}",
-                f"{change:.2f} ({pct:.2f}%)"
-            )
-
-            # Chart: Show only today's data for clarity
-            today_only = df[df['Date'] == unique_dates[-1]]
-            fig = px.line(today_only, x="Datetime", y="Close", height=280)
-            fig.update_layout(margin=dict(l=10, r=10, t=10, b=10), hovermode="x unified")
-            st.plotly_chart(fig, use_container_width=True)
-
-# =========================
-# MCX SECTION
-# =========================
-st.subheader("🇮🇳 MCX Futures (vs Yesterday Close)")
-
-today_df, yday_df = fetch_mcx_two_days()
-
-if today_df.empty or yday_df.empty:
-    st.info("Searching for latest MCX Bhavcopy files...")
-else:
-    mcx_symbols = ["GOLD", "SILVER", "COPPER", "CRUDEOIL"]
-    cols = st.columns(len(mcx_symbols))
-
-    for col, symbol in zip(cols, mcx_symbols):
-        with col:
-            t_row = today_df[today_df["SYMBOL"] == symbol]
-            y_row = yday_df[yday_df["SYMBOL"] == symbol]
-
-            if not t_row.empty and not y_row.empty:
-                # Usually MCX Bhavcopy uses 'CP' or 'SETTLE_PR'
-                price_col = "SETTLE_PR" if "SETTLE_PR" in t_row.columns else t_row.columns[-1]
+            if not df.empty:
+                df['Date'] = df['Datetime'].dt.date
+                dates = sorted(df['Date'].unique())
+                today = df[df['Date'] == dates[-1]]
+                yday_close = df[df['Date'] == dates[-2]]["Close"].iloc[-1] if len(dates) > 1 else today["Close"].iloc[0]
                 
-                today_val = float(t_row.iloc[0][price_col])
-                yday_val = float(y_row.iloc[0][price_col])
+                ltp, d_high, d_low = today["Close"].iloc[-1], today["High"].max(), today["Low"].min()
+                
+                m1, m2, m3 = st.columns(3)
+                m1.metric(name, f"${ltp:.2f}", f"{ltp-yday_close:.2f}")
+                m2.metric("Day High", f"${d_high:.2f}")
+                m3.metric("Day Low", f"${d_low:.2f}")
+                
+                fig = px.line(today, x="Datetime", y="Close", height=200)
+                fig.update_layout(margin=dict(l=0, r=0, t=0, b=0))
+                st.plotly_chart(fig, use_container_width=True)
 
-                change = today_val - yday_val
-                pct = (change / yday_val) * 100
-
-                st.metric(f"MCX {symbol}", f"{today_val:,.0f}", f"{change:,.2f} ({pct:.2f}%)")
-                st.link_button("View on MCX", "https://www.mcxindia.com")
-
-# =========================
-# Footer
-# =========================
+# --- MCX SECTION ---
 st.divider()
-st.caption(f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | Data: Yahoo Finance & MCX India")
+st.subheader("🇮🇳 MCX Futures")
+t_df, y_df = fetch_mcx_two_days()
+if not t_df.empty:
+    for sym in ["GOLD", "SILVER", "CRUDEOIL", "COPPER"]:
+        tr = t_df[t_df["SYMBOL"] == sym]
+        yr = y_df[y_df["SYMBOL"] == sym]
+        if not tr.empty:
+            with st.container(border=True):
+                c1, c2, c3, c4 = st.columns(4)
+                ltp, y_c = float(tr.iloc[0]["CLOSE"]), float(yr.iloc[0]["CLOSE"])
+                c1.metric(f"MCX {sym}", f"₹{ltp:,.0f}", f"{ltp-y_c:,.2f}")
+                c2.metric("Prev Close", f"₹{y_c:,.0f}")
+                c3.metric("High", f"₹{float(tr.iloc[0]['HIGH']):,.0f}")
+                c4.metric("Low", f"₹{float(tr.iloc[0]['LOW']):,.0f}")
