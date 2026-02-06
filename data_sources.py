@@ -1,30 +1,46 @@
 import yfinance as yf
 import pandas as pd
 import requests
-from datetime import datetime
+import io
+from datetime import datetime, timedelta
 
-# ---------- COMEX ----------
+# =========================
+# COMEX (Yahoo Finance)
+# =========================
 def fetch_comex(symbol):
-    ticker = yf.Ticker(symbol)
-    df = ticker.history(period="1d", interval="1m")
-    df = df.reset_index()
-    return df.tail(60)  # last 60 minutes
+    """
+    Fetch last 60 minutes of COMEX data (1m bars)
+    """
+    try:
+        ticker = yf.Ticker(symbol)
+        df = ticker.history(period="1d", interval="1m")
+
+        if df.empty:
+            return pd.DataFrame()
+
+        df = df.reset_index()
+        return df.tail(60)
+
+    except Exception:
+        return pd.DataFrame()
 
 
-# ---------- MCX (Bhavcopy) ----------
 def fetch_mcx():
-    url = "https://www.mcxindia.com/backpage.aspx/GetMarketWatch"
-    payload = {
-        "InstrumentName": "FUTCOM",
-        "Expiry": ""
-    }
-    headers = {"Content-Type": "application/json"}
+    """
+    Fetch latest available MCX Bhavcopy CSV
+    (tries today, then yesterday)
+    """
+    for i in range(2):
+        date = (datetime.now() - timedelta(days=i)).strftime("%Y%m%d")
+        url = f"https://www.mcxindia.com/downloads/Bhavcopy_{date}.csv"
 
-    r = requests.post(url, json=payload, headers=headers, timeout=5)
-    data = r.json()["d"]
-    df = pd.DataFrame(data)
+        try:
+            r = requests.get(url, timeout=10)
+            if r.status_code == 200 and "SYMBOL" in r.text:
+                df = pd.read_csv(io.StringIO(r.text))
+                df.columns = df.columns.str.strip()
+                return df
+        except Exception:
+            continue
 
-    df["LTP"] = pd.to_numeric(df["LastTradedPrice"], errors="coerce")
-    df["Time"] = datetime.now()
-
-    return df
+    return pd.DataFrame()
