@@ -8,14 +8,14 @@ from datetime import datetime
 # Page config
 # =========================
 st.set_page_config(page_title="Commodity Dashboard", layout="wide")
-st_autorefresh(interval=1000, key="refresh")
+st_autorefresh(interval=60000, key="refresh") # Refresh every 60s to avoid rate limits
 
 st.title("📊 Commodity Dashboard")
 
 # =========================
 # COMEX SECTION
 # =========================
-st.subheader("🌍 COMEX Futures (Intraday)")
+st.subheader("🌍 COMEX Futures (vs Prev. Close)")
 
 commodities = [
     ("Gold", "GC=F"),
@@ -33,24 +33,37 @@ for i in range(0, len(commodities), 2):
         with col:
             df = fetch_comex(symbol)
 
-            if df.empty or len(df) < 2:
+            if df.empty:
                 st.warning(f"{name} data unavailable")
                 continue
 
-            ltp = df["Close"].iloc[-1]
-            prev = df["Close"].iloc[-2]
+            # Identify 'Today' and 'Yesterday' groups
+            df['Date'] = df['Datetime'].dt.date
+            unique_dates = sorted(df['Date'].unique())
+
+            if len(unique_dates) < 2:
+                # If only 1 day of data is available, compare to first row
+                ltp = df["Close"].iloc[-1]
+                prev_close = df["Close"].iloc[0]
+            else:
+                # Last price of the previous date in the data
+                yday_close = df[df['Date'] == unique_dates[-2]]["Close"].iloc[-1]
+                ltp = df["Close"].iloc[-1]
+                prev_close = yday_close
+
+            change = ltp - prev_close
+            pct = (change / prev_close) * 100
 
             st.metric(
                 name,
                 f"{ltp:.2f}",
-                f"{ltp - prev:.2f}"
+                f"{change:.2f} ({pct:.2f}%)"
             )
 
-            fig = px.line(df, x="Datetime", y="Close", height=280)
-            fig.update_layout(
-                margin=dict(l=10, r=10, t=10, b=10),
-                hovermode="x unified"
-            )
+            # Chart: Show only today's data for clarity
+            today_only = df[df['Date'] == unique_dates[-1]]
+            fig = px.line(today_only, x="Datetime", y="Close", height=280)
+            fig.update_layout(margin=dict(l=10, r=10, t=10, b=10), hovermode="x unified")
             st.plotly_chart(fig, use_container_width=True)
 
 # =========================
@@ -61,43 +74,31 @@ st.subheader("🇮🇳 MCX Futures (vs Yesterday Close)")
 today_df, yday_df = fetch_mcx_two_days()
 
 if today_df.empty or yday_df.empty:
-    st.warning("MCX data not available yet.")
+    st.info("Searching for latest MCX Bhavcopy files...")
 else:
     mcx_symbols = ["GOLD", "SILVER", "COPPER", "CRUDEOIL"]
-
     cols = st.columns(len(mcx_symbols))
 
     for col, symbol in zip(cols, mcx_symbols):
         with col:
-            today_row = today_df[today_df["SYMBOL"] == symbol]
-            yday_row = yday_df[yday_df["SYMBOL"] == symbol]
+            t_row = today_df[today_df["SYMBOL"] == symbol]
+            y_row = yday_df[yday_df["SYMBOL"] == symbol]
 
-            if today_row.empty or yday_row.empty:
-                st.warning(symbol)
-                continue
+            if not t_row.empty and not y_row.empty:
+                # Usually MCX Bhavcopy uses 'CP' or 'SETTLE_PR'
+                price_col = "SETTLE_PR" if "SETTLE_PR" in t_row.columns else t_row.columns[-1]
+                
+                today_val = float(t_row.iloc[0][price_col])
+                yday_val = float(y_row.iloc[0][price_col])
 
-            today_price = today_row.iloc[0]["SETTLE_PR"]
-            yday_price = yday_row.iloc[0]["SETTLE_PR"]
+                change = today_val - yday_val
+                pct = (change / yday_val) * 100
 
-            change = today_price - yday_price
-            pct = (change / yday_price) * 100
-
-            st.metric(
-                f"MCX {symbol}",
-                f"{today_price}",
-                f"{change:.2f} ({pct:.2f}%)"
-            )
-
-            # Click-through to MCX
-            st.link_button(
-                "Open on MCX",
-                "https://www.mcxindia.com/market-data/commodity-futures-market-watch"
-            )
+                st.metric(f"MCX {symbol}", f"{today_val:,.0f}", f"{change:,.2f} ({pct:.2f}%)")
+                st.link_button("View on MCX", "https://www.mcxindia.com")
 
 # =========================
 # Footer
 # =========================
-st.caption(
-    f"Last updated: {datetime.now().strftime('%H:%M:%S')} | "
-    "Free data. MCX prices vs previous close."
-)
+st.divider()
+st.caption(f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | Data: Yahoo Finance & MCX India")
