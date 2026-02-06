@@ -3,15 +3,14 @@ import pandas as pd
 
 def fetch_comex(symbol: str) -> pd.DataFrame:
     """
-    Fetch intraday COMEX data from market open till now (1-minute bars).
-    Uses Yahoo Finance (free).
+    Fetch intraday COMEX data from market open till now (1-minute bars)
     """
     try:
         ticker = yf.Ticker(symbol)
 
         df = ticker.history(
-            period="1d",        # current session
-            interval="1m",      # 1-minute candles
+            period="1d",
+            interval="1m",
             auto_adjust=False
         )
 
