@@ -1,30 +1,44 @@
 import streamlit as st
-import pandas as pd
 import plotly.express as px
 from streamlit_autorefresh import st_autorefresh
 from data_sources import fetch_comex, fetch_mcx
+from datetime import datetime
 
-st.set_page_config("Commodity Tracker", layout="wide")
+# =========================
+# Page config
+# =========================
+st.set_page_config(
+    page_title="Live Commodity Tracker",
+    layout="wide"
+)
 
-# Auto refresh every second
+# Auto refresh every 1 second
 st_autorefresh(interval=1000, key="refresh")
 
 st.title("📊 Live COMEX + MCX Commodity Tracker")
 
-# ---------------- COMEX ----------------
-st.subheader("🌍 COMEX Futures")
+# =========================
+# COMEX SECTION
+# =========================
+st.subheader("🌍 COMEX Futures (Free – Near Real-Time)")
 
 comex_map = {
     "Gold": "GC=F",
     "Silver": "SI=F",
-    "Copper": "HG=F"
+    "Copper": "HG=F",
+    "Crude Oil": "CL=F"
 }
 
 comex_cols = st.columns(len(comex_map))
 
-for i, (name, symbol) in enumerate(comex_map.items()):
-    with comex_cols[i]:
+for idx, (name, symbol) in enumerate(comex_map.items()):
+    with comex_cols[idx]:
         df = fetch_comex(symbol)
+
+        if df.empty or len(df) < 2:
+            st.warning(f"{name} data unavailable")
+            continue
+
         ltp = df["Close"].iloc[-1]
         prev = df["Close"].iloc[-2]
         delta = ltp - prev
@@ -39,35 +53,51 @@ for i, (name, symbol) in enumerate(comex_map.items()):
             df,
             x="Datetime",
             y="Close",
-            title=f"{name} (Last 60 min)"
+            height=250
         )
+        fig.update_layout(margin=dict(l=10, r=10, t=10, b=10))
         st.plotly_chart(fig, use_container_width=True)
 
-# ---------------- MCX ----------------
-st.subheader("🇮🇳 MCX Futures (Delayed)")
+# =========================
+# MCX SECTION
+# =========================
+st.subheader("🇮🇳 MCX Futures (Free – Delayed Bhavcopy)")
 
 mcx_df = fetch_mcx()
 
-gold = mcx_df[mcx_df["Symbol"] == "GOLD"].iloc[0]
-silver = mcx_df[mcx_df["Symbol"] == "SILVER"].iloc[0]
+if mcx_df.empty:
+    st.warning("MCX bhavcopy not available yet.")
+else:
+    mcx_map = {
+        "MCX Gold": "GOLD",
+        "MCX Silver": "SILVER"
+    }
 
-mcx_cols = st.columns(2)
+    mcx_cols = st.columns(len(mcx_map))
 
-with mcx_cols[0]:
-    st.metric(
-        "MCX Gold",
-        value=gold["LTP"],
-        delta=gold["Change"]
-    )
+    for idx, (label, symbol) in enumerate(mcx_map.items()):
+        with mcx_cols[idx]:
+            row = mcx_df[mcx_df["SYMBOL"] == symbol]
 
-with mcx_cols[1]:
-    st.metric(
-        "MCX Silver",
-        value=silver["LTP"],
-        delta=silver["Change"]
+            if row.empty:
+                st.warning(f"{label} not found")
+                continue
 
-    )
+            row = row.iloc[0]
 
-st.caption("⚠️ Data is free-source & delayed. Not for trading.")
+            price = row.get("SETTLE_PR", row.get("CLOSE", 0))
+            change = row.get("NET_CHANGE", 0)
 
+            st.metric(
+                label=label,
+                value=f"{price}",
+                delta=f"{change}"
+            )
 
+# =========================
+# Footer
+# =========================
+st.caption(
+    f"Last refreshed: {datetime.now().strftime('%H:%M:%S')} | "
+    "Free data sources. Not for trading."
+)
