@@ -4,62 +4,44 @@ import requests
 import io
 from datetime import datetime, timedelta
 
-# =========================
-# COMEX (Yahoo Finance)
-# =========================
-def fetch_comex(symbol: str) -> pd.DataFrame:
-    """
-    Fetches 2 days of intraday data to allow comparison with 
-    yesterday's final closing price.
-    """
+def fetch_comex(symbol):
     try:
         ticker = yf.Ticker(symbol)
-        # Fetching 2 days gives us 'Yesterday' and 'Today'
-        df = ticker.history(period="2d", interval="1m", auto_adjust=False)
+        return ticker.history(period="5d", interval="1m").reset_index()
+    except: return pd.DataFrame()
 
-        if df.empty:
-            return pd.DataFrame()
-
-        df = df.reset_index()
-        # Filter for active trading minutes
-        if "Volume" in df.columns:
-            df = df[df["Volume"] > 0]
-
-        return df
-    except Exception:
-        return pd.DataFrame()
-
-
-# =========================
-# MCX Bhavcopy (Official)
-# =========================
 def fetch_mcx_two_days():
-    """
-    Finds the two most recent available MCX Bhavcopy files.
-    Accounts for weekends and holidays by looking back up to 7 days.
-    """
-    found_dfs = []
-    
-    # Check the last 7 days to find the 2 latest valid files
-    for i in range(7):
-        date_str = (datetime.now() - timedelta(days=i)).strftime("%Y%m%d")
-        url = f"https://www.mcxindia.com/downloads/Bhavcopy_{date_str}.csv"
-        
+    found = []
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    for i in range(10):
+        date = (datetime.now() - timedelta(days=i)).strftime("%Y%m%d")
+        url = f"https://www.mcxindia.com/downloads/Bhavcopy_{date}.csv"
         try:
-            # Short timeout to keep the app responsive
-            r = requests.get(url, timeout=5)
-            if r.status_code == 200 and "SYMBOL" in r.text:
+            r = requests.get(url, headers=headers, timeout=5)
+            if r.status_code == 200:
                 df = pd.read_csv(io.StringIO(r.text))
-                df.columns = df.columns.str.strip()
-                found_dfs.append(df)
-            
-            if len(found_dfs) == 2:
-                break
-        except Exception:
-            continue
+                df.columns = df.columns.str.strip().str.upper()
+                found.append(df)
+            if len(found) == 2: break
+        except: continue
+    return (found[0], found[1]) if len(found) >= 2 else (pd.DataFrame(), pd.DataFrame())
 
-    if len(found_dfs) == 2:
-        # found_dfs[0] is most recent (Today), [1] is previous session
-        return found_dfs[0], found_dfs[1]
+def get_dynamic_recos():
+    # Placeholder for live data; in real use, this could be a scraper
+    data = [
+        {"Stock": "Bharti Airtel", "Symbol": "BHARTIARTL.NS", "Buy_Rate": "2365", "Target": 2700, "Date": datetime.now() - timedelta(days=2)},
+        {"Stock": "SBI", "Symbol": "SBIN.NS", "Buy_Rate": "920", "Target": 1100, "Date": datetime.now() - timedelta(days=1)},
+    ]
+    recos = [r for r in data if r['Date'] > datetime.now() - timedelta(days=7)]
+    for r in recos:
+        t = yf.Ticker(r['Symbol'])
+        r['CMP'] = t.fast_info['lastPrice']
+        r['Date'] = r['Date'].strftime('%Y-%m-%d')
+        r['Upside %'] = round(((r['Target'] - r['CMP']) / r['CMP']) * 100, 2)
+    return pd.DataFrame(recos)
 
-    return pd.DataFrame(), pd.DataFrame()
+def get_live_market_news():
+    news = []
+    for sym in ["^NSEI", "^BSESN"]:
+        news.extend(yf.Ticker(sym).news[:5])
+    return news
