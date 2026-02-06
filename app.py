@@ -1,16 +1,19 @@
 import streamlit as st
 import plotly.express as px
 from streamlit_autorefresh import st_autorefresh
-from data_sources import fetch_comex, fetch_mcx_two_days
+from data_sources import fetch_comex, fetch_mcx_two_days, get_dynamic_recos, get_live_market_news
+from datetime import datetime
 
-st.set_page_config(page_title="Commodity Dashboard", layout="wide", page_icon="📊")
-st_autorefresh(interval=60000, key="refresh") # Auto-refresh every 60s
+# Page configuration
+st.set_page_config(page_title="Commodity & Stock Dashboard", layout="wide", page_icon="📊")
+st_autorefresh(interval=60000, key="refresh")
 
-st.title("📊 Commodity Pro Dashboard")
-st.sidebar.success("Select a page above for Live Stock Picks & News.")
+st.title("📊 Multi-Asset Market Dashboard")
 
-# --- COMEX ---
-st.subheader("🌍 COMEX Futures")
+# =========================
+# 🌍 SECTION 1: COMEX
+# =========================
+st.subheader("🌍 COMEX Futures (International)")
 commodities = [("Gold", "GC=F"), ("Silver", "SI=F"), ("Crude Oil", "CL=F"), ("Copper", "HG=F")]
 
 for i in range(0, len(commodities), 2):
@@ -28,16 +31,19 @@ for i in range(0, len(commodities), 2):
                 
                 m1, m2, m3 = st.columns(3)
                 m1.metric(name, f"${ltp:.2f}", f"{ltp-yday_close:.2f}")
-                m2.metric("Day High", f"${d_high:.2f}")
-                m3.metric("Day Low", f"${d_low:.2f}")
+                m2.metric("High", f"${d_high:.2f}")
+                m3.metric("Low", f"${d_low:.2f}")
                 
-                fig = px.line(today, x="Datetime", y="Close", height=230)
+                fig = px.line(today, x="Datetime", y="Close", height=200)
                 fig.update_layout(margin=dict(l=0, r=0, t=0, b=0))
                 st.plotly_chart(fig, use_container_width=True)
 
-# --- MCX ---
 st.divider()
-st.subheader("🇮🇳 MCX Futures")
+
+# =========================
+# 🇮🇳 SECTION 2: MCX
+# =========================
+st.subheader("🇮🇳 MCX Futures (Domestic)")
 t_df, y_df = fetch_mcx_two_days()
 if not t_df.empty:
     for sym in ["GOLD", "SILVER", "CRUDEOIL", "COPPER"]:
@@ -52,4 +58,36 @@ if not t_df.empty:
                 c3.metric("High", f"₹{float(tr.iloc[0]['HIGH']):,.0f}")
                 c4.metric("Low", f"₹{float(tr.iloc[0]['LOW']):,.0f}")
 else:
-    st.warning("Searching for latest MCX Bhavcopy files...")
+    st.info("Searching for latest MCX Bhavcopy files...")
+
+st.divider()
+
+# =========================
+# 🚀 SECTION 3: STOCK PICKS & NEWS
+# =========================
+st.subheader("🚀 Live Stock Picks & Market News")
+reco_col, news_col = st.columns([1, 1])
+
+with reco_col:
+    st.markdown("#### 💡 Weekly Recommendations")
+    recos = get_dynamic_recos()
+    if not recos.empty:
+        st.dataframe(
+            recos[["Stock", "Date", "Buy_Rate", "CMP", "Target", "Upside %"]],
+            use_container_width=True, hide_index=True,
+            column_config={"CMP": "Price", "Target": "Goal", "Upside %": st.column_config.NumberColumn(format="%.1f%%")}
+        )
+    else:
+        st.write("No active picks for this week.")
+
+with news_col:
+    st.markdown("#### 📰 Latest Headlines")
+    news_items = get_live_market_news()
+    for item in news_items[:6]:
+        with st.expander(f"📌 {item['title'][:60]}..."):
+            st.write(f"Source: {item.get('publisher', 'Finance News')}")
+            st.write(f"Published: {datetime.fromtimestamp(item['provider_publish_time']).strftime('%Y-%m-%d %H:%M')}")
+            st.link_button("Read Full Article", item['link'])
+
+st.caption(f"Last sync: {datetime.now().strftime('%H:%M:%S')} | Data from Yahoo Finance & MCX India")
+
