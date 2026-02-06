@@ -71,23 +71,57 @@ reco_col, news_col = st.columns([1, 1])
 with reco_col:
     st.markdown("#### 💡 Weekly Recommendations")
     recos = get_dynamic_recos()
-    if not recos.empty:
+    if recos is not None and not recos.empty:
         st.dataframe(
             recos[["Stock", "Date", "Buy_Rate", "CMP", "Target", "Upside %"]],
             use_container_width=True, hide_index=True,
-            column_config={"CMP": "Price", "Target": "Goal", "Upside %": st.column_config.NumberColumn(format="%.1f%%")}
+            column_config={
+                "CMP": "Price", 
+                "Target": "Goal", 
+                "Upside %": st.column_config.NumberColumn(format="%.1f%%")
+            }
         )
     else:
-        st.write("No active picks for this week.")
+        st.warning("Unable to fetch recommendations at the moment.")
+    
+    # Add recommendation news
+    st.markdown("#### 📈 Stock Recommendation News")
+    reco_news = get_live_market_news()
+    if reco_news:
+        for item in reco_news[:5]:
+            if isinstance(item, dict) and 'title' in item:
+                title = item.get('title', 'No title')
+                with st.expander(f"📌 {title[:60]}..."):
+                    st.write(f"**Source:** {item.get('publisher', 'Unknown')}")
+                    if 'provider_publish_time' in item:
+                        try:
+                            st.write(f"**Published:** {datetime.fromtimestamp(item['provider_publish_time']).strftime('%Y-%m-%d %H:%M')}")
+                        except:
+                            st.write(f"**Published:** Recent")
+                    if 'link' in item:
+                        st.link_button("Read Full Article", item['link'])
+    else:
+        st.info("No recent recommendation news available.")
 
 with news_col:
-    st.markdown("#### 📰 Latest Headlines")
+    st.markdown("#### 📰 Live Market Headlines")
     news_items = get_live_market_news()
-    for item in news_items[:6]:
-        with st.expander(f"📌 {item['title'][:60]}..."):
-            st.write(f"Source: {item.get('publisher', 'Finance News')}")
-            st.write(f"Published: {datetime.fromtimestamp(item['provider_publish_time']).strftime('%Y-%m-%d %H:%M')}")
-            st.link_button("Read Full Article", item['link'])
+    if news_items:
+        for item in news_items[:8]:
+            if isinstance(item, dict) and 'title' in item:
+                title = item.get('title', 'No title')
+                with st.expander(f"📰 {title[:70]}..."):
+                    st.write(f"**Source:** {item.get('publisher', 'Finance News')}")
+                    if 'provider_publish_time' in item:
+                        try:
+                            st.write(f"**Published:** {datetime.fromtimestamp(item['provider_publish_time']).strftime('%Y-%m-%d %H:%M')}")
+                        except:
+                            st.write(f"**Published:** Recent")
+                    if 'link' in item:
+                        st.link_button("Read Full Article", item['link'])
+    else:
+        st.info("Fetching latest market news...")
 
 st.caption(f"Last sync: {datetime.now().strftime('%H:%M:%S')} | Data from Yahoo Finance & MCX India")
+
 
