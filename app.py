@@ -14,6 +14,44 @@ from datetime import datetime
 st.set_page_config(page_title="Commodity & Stock Dashboard", layout="wide", page_icon="📊")
 st_autorefresh(interval=60000, key="refresh")
 
+# Custom CSS for Montserrat font
+st.markdown("""
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600;700&display=swap');
+    
+    html, body, [class*="css"] {
+        font-family: 'Montserrat', sans-serif;
+    }
+    
+    h1, h2, h3, h4, h5, h6 {
+        font-family: 'Montserrat', sans-serif;
+        font-weight: 600;
+    }
+    
+    .stMetric {
+        font-family: 'Montserrat', sans-serif;
+    }
+    
+    .stMetric > label {
+        font-family: 'Montserrat', sans-serif;
+        font-weight: 500;
+    }
+    
+    .stMetric > div {
+        font-family: 'Montserrat', sans-serif;
+        font-weight: 600;
+    }
+    
+    div[data-testid="stDataFrame"] {
+        font-family: 'Montserrat', sans-serif;
+    }
+    
+    .stMarkdown {
+        font-family: 'Montserrat', sans-serif;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 st.title("📊 Multi-Asset Market Dashboard")
 
 # =========================
@@ -34,9 +72,10 @@ for i in range(0, len(commodities), 2):
                 yday_close = df[df['Date'] == dates[-2]]["Close"].iloc[-1] if len(dates) > 1 else today["Close"].iloc[0]
                 
                 ltp, d_high, d_low = today["Close"].iloc[-1], today["High"].max(), today["Low"].min()
+                change = ltp - yday_close
                 
                 m1, m2, m3 = st.columns(3)
-                m1.metric(name, f"${ltp:.2f}", f"{ltp-yday_close:.2f}")
+                m1.metric(name, f"${ltp:.2f}", f"{change:.2f}", delta_color="normal")
                 m2.metric("High", f"${d_high:.2f}")
                 m3.metric("Low", f"${d_low:.2f}")
                 
@@ -71,7 +110,7 @@ for i in range(0, len(mcx_commodities), 2):
                 change = ltp - yday_close
                 
                 m1, m2, m3 = st.columns(3)
-                m1.metric(f"MCX {name}", f"₹{ltp:,.0f}", f"₹{change:,.0f}")
+                m1.metric(f"MCX {name}", f"₹{ltp:,.0f}", f"{change:,.0f}", delta_color="normal")
                 m2.metric("High", f"₹{d_high:,.0f}")
                 m3.metric("Low", f"₹{d_low:,.0f}")
                 
