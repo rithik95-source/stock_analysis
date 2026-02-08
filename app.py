@@ -182,6 +182,17 @@ for i in range(0, len(commodities), 2):
                         paper_bgcolor='rgba(0,0,0,0)',
                     )
                     
+                    # Auto-adjust Y-axis with padding
+                    y_min = df['Low'].min()
+                    y_max = df['High'].max()
+                    y_range = y_max - y_min
+                    y_padding = y_range * 0.1  # 10% padding on each side
+                    
+                    fig.update_yaxes(
+                        range=[y_min - y_padding, y_max + y_padding],
+                        fixedrange=False
+                    )
+                    
                     # Add previous close line for 1D view
                     if selected_period == "1D":
                         fig.add_hline(
@@ -370,6 +381,17 @@ for i in range(0, len(mcx_commodities), 2):
                         paper_bgcolor='rgba(0,0,0,0)',
                     )
                     
+                    # Auto-adjust Y-axis with padding
+                    y_min = df['Low'].min()
+                    y_max = df['High'].max()
+                    y_range = y_max - y_min
+                    y_padding = y_range * 0.1  # 10% padding on each side
+                    
+                    fig.update_yaxes(
+                        range=[y_min - y_padding, y_max + y_padding],
+                        fixedrange=False
+                    )
+                    
                     # Add previous close line for 1D view
                     if selected_period == "1D":
                         fig.add_hline(
@@ -526,6 +548,7 @@ st.markdown(
     """,
     unsafe_allow_html=True
 )
+
 
 
 
