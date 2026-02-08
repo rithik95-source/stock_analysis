@@ -14,7 +14,7 @@ from datetime import datetime
 
 # Page configuration
 st.set_page_config(page_title="Commodity & Stock Dashboard", layout="wide", page_icon="📊")
-st_autorefresh(interval=60000, key="refresh")
+st_autorefresh(interval=30000, key="refresh")  # 30 seconds for live sync
 
 # Custom CSS for Montserrat font
 st.markdown("""
@@ -97,25 +97,62 @@ for i in range(0, len(commodities), 2):
             # Fetch data
             try:
                 ticker = yf.Ticker(symbol)
-                df = ticker.history(period=period, interval=interval).reset_index()
+                
+                # Special handling ONLY for 1D view
+                if selected_period == "1D":
+                    # Get last 5 days to ensure we have data even on weekends
+                    df_raw = ticker.history(period="5d", interval="5m").reset_index()
+                    
+                    if not df_raw.empty:
+                        time_col = 'Datetime' if 'Datetime' in df_raw.columns else 'Date'
+                        
+                        # Get unique trading dates
+                        if time_col == 'Datetime':
+                            df_raw['TradingDate'] = df_raw['Datetime'].dt.date
+                        else:
+                            df_raw['TradingDate'] = df_raw['Date']
+                        
+                        unique_dates = sorted(df_raw['TradingDate'].unique())
+                        
+                        # Get last trading day data
+                        last_trading_day = unique_dates[-1]
+                        df = df_raw[df_raw['TradingDate'] == last_trading_day].copy()
+                        
+                        # Get previous trading day close for comparison
+                        if len(unique_dates) >= 2:
+                            prev_trading_day = unique_dates[-2]
+                            prev_day_data = df_raw[df_raw['TradingDate'] == prev_trading_day]
+                            prev_close = prev_day_data['Close'].iloc[-1]
+                        else:
+                            prev_close = df['Close'].iloc[0]
+                    else:
+                        df = pd.DataFrame()
+                        prev_close = 0
+                else:
+                    # For all other periods, use normal fetching
+                    df = ticker.history(period=period, interval=interval).reset_index()
+                    time_col = 'Datetime' if 'Datetime' in df.columns else 'Date'
+                    prev_close = df['Close'].iloc[0] if not df.empty else 0
                 
                 if not df.empty:
-                    # Determine if we should use 'Date' or 'Datetime' column
-                    time_col = 'Datetime' if 'Datetime' in df.columns else 'Date'
-                    
-                    # Calculate if overall change is positive or negative
-                    first_close = df['Close'].iloc[0]
+                    # Calculate metrics
                     last_close = df['Close'].iloc[-1]
-                    change = last_close - first_close
+                    change = last_close - prev_close
+                    pct_change = (change / prev_close) * 100 if prev_close != 0 else 0
                     is_positive = change >= 0
                     
-                    # Get metrics
+                    # Get high/low for the displayed period
                     d_high = df['High'].max()
                     d_low = df['Low'].min()
                     
-                    # Display metrics
+                    # Display metrics with percentage
                     m1, m2, m3 = st.columns(3)
-                    m1.metric(name, f"${last_close:.2f}", f"{change:.2f}", delta_color="normal")
+                    m1.metric(
+                        name, 
+                        f"${last_close:.2f}", 
+                        f"{change:.2f} ({pct_change:+.2f}%)", 
+                        delta_color="normal"
+                    )
                     m2.metric("High", f"${d_high:.2f}")
                     m3.metric("Low", f"${d_low:.2f}")
                     
@@ -146,13 +183,13 @@ for i in range(0, len(commodities), 2):
                     )
                     
                     # Add previous close line for 1D view
-                    if selected_period == "1D" and len(df) > 1:
+                    if selected_period == "1D":
                         fig.add_hline(
-                            y=first_close, 
+                            y=prev_close, 
                             line_dash="dot", 
                             line_color="gray",
                             opacity=0.5,
-                            annotation_text=f"Prev Close: ${first_close:.2f}",
+                            annotation_text=f"Prev Close: ${prev_close:.2f}",
                             annotation_position="right"
                         )
                     
@@ -243,28 +280,67 @@ for i in range(0, len(mcx_commodities), 2):
             try:
                 yahoo_symbol = mcx_to_yahoo[symbol]
                 ticker = yf.Ticker(yahoo_symbol)
-                df = ticker.history(period=period, interval=interval).reset_index()
+                
+                # Special handling ONLY for 1D view
+                if selected_period == "1D":
+                    # Get last 5 days to ensure we have data even on weekends
+                    df_raw = ticker.history(period="5d", interval="5m").reset_index()
+                    
+                    if not df_raw.empty:
+                        # Convert to INR
+                        df_raw = convert_to_inr(df_raw, symbol)
+                        
+                        time_col = 'Datetime' if 'Datetime' in df_raw.columns else 'Date'
+                        
+                        # Get unique trading dates
+                        if time_col == 'Datetime':
+                            df_raw['TradingDate'] = df_raw['Datetime'].dt.date
+                        else:
+                            df_raw['TradingDate'] = df_raw['Date']
+                        
+                        unique_dates = sorted(df_raw['TradingDate'].unique())
+                        
+                        # Get last trading day data
+                        last_trading_day = unique_dates[-1]
+                        df = df_raw[df_raw['TradingDate'] == last_trading_day].copy()
+                        
+                        # Get previous trading day close for comparison
+                        if len(unique_dates) >= 2:
+                            prev_trading_day = unique_dates[-2]
+                            prev_day_data = df_raw[df_raw['TradingDate'] == prev_trading_day]
+                            prev_close = prev_day_data['Close'].iloc[-1]
+                        else:
+                            prev_close = df['Close'].iloc[0]
+                    else:
+                        df = pd.DataFrame()
+                        prev_close = 0
+                else:
+                    # For all other periods, use normal fetching
+                    df = ticker.history(period=period, interval=interval).reset_index()
+                    if not df.empty:
+                        df = convert_to_inr(df, symbol)
+                    time_col = 'Datetime' if 'Datetime' in df.columns else 'Date'
+                    prev_close = df['Close'].iloc[0] if not df.empty else 0
                 
                 if not df.empty:
-                    # Convert to INR
-                    df = convert_to_inr(df, symbol)
-                    
-                    # Determine if we should use 'Date' or 'Datetime' column
-                    time_col = 'Datetime' if 'Datetime' in df.columns else 'Date'
-                    
-                    # Calculate if overall change is positive or negative
-                    first_close = df['Close'].iloc[0]
+                    # Calculate metrics
                     last_close = df['Close'].iloc[-1]
-                    change = last_close - first_close
+                    change = last_close - prev_close
+                    pct_change = (change / prev_close) * 100 if prev_close != 0 else 0
                     is_positive = change >= 0
                     
-                    # Get metrics
+                    # Get high/low for the displayed period
                     d_high = df['High'].max()
                     d_low = df['Low'].min()
                     
-                    # Display metrics
+                    # Display metrics with percentage
                     m1, m2, m3 = st.columns(3)
-                    m1.metric(f"MCX {name}", f"₹{last_close:,.0f}", f"{change:,.0f}", delta_color="normal")
+                    m1.metric(
+                        f"MCX {name}", 
+                        f"₹{last_close:,.0f}", 
+                        f"{change:,.0f} ({pct_change:+.2f}%)", 
+                        delta_color="normal"
+                    )
                     m2.metric("High", f"₹{d_high:,.0f}")
                     m3.metric("Low", f"₹{d_low:,.0f}")
                     
@@ -295,13 +371,13 @@ for i in range(0, len(mcx_commodities), 2):
                     )
                     
                     # Add previous close line for 1D view
-                    if selected_period == "1D" and len(df) > 1:
+                    if selected_period == "1D":
                         fig.add_hline(
-                            y=first_close, 
+                            y=prev_close, 
                             line_dash="dot", 
                             line_color="gray",
                             opacity=0.5,
-                            annotation_text=f"Prev Close: ₹{first_close:,.0f}",
+                            annotation_text=f"Prev Close: ₹{prev_close:,.0f}",
                             annotation_position="right"
                         )
                     
@@ -436,7 +512,7 @@ st.divider()
 # Footer
 col1, col2 = st.columns(2)
 with col1:
-    st.caption(f"🔄 Last updated: {datetime.now().strftime('%d %b %Y, %H:%M:%S')}")
+    st.caption(f"🔴 Live • Last updated: {datetime.now().strftime('%d %b %Y, %H:%M:%S')} • Syncing every 30s")
 with col2:
     st.caption("📊 Data from Yahoo Finance, MCX India, Economic Times & Moneycontrol")
 
@@ -450,7 +526,6 @@ st.markdown(
     """,
     unsafe_allow_html=True
 )
-
 
 
 
