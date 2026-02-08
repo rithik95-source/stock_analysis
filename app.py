@@ -1,7 +1,13 @@
 import streamlit as st
 import plotly.express as px
 from streamlit_autorefresh import st_autorefresh
-from data_sources import fetch_comex, fetch_mcx_two_days, get_dynamic_recos, get_live_market_news
+from data_sources import (
+    fetch_comex, 
+    fetch_mcx_two_days, 
+    get_intraday_recommendations,
+    get_longterm_recommendations,
+    get_live_market_news
+)
 from datetime import datetime
 
 # Page configuration
@@ -63,65 +69,142 @@ else:
 st.divider()
 
 # =========================
-# 🚀 SECTION 3: STOCK PICKS & NEWS
+# 🚀 SECTION 3: STOCK RECOMMENDATIONS
 # =========================
-st.subheader("🚀 Live Stock Picks & Market News")
-reco_col, news_col = st.columns([1, 1])
+st.subheader("🚀 Live Stock Recommendations")
 
-with reco_col:
-    st.markdown("#### 💡 Weekly Recommendations")
-    recos = get_dynamic_recos()
-    if recos is not None and not recos.empty:
+# Create tabs for Intraday and Long-term
+tab1, tab2 = st.tabs(["⚡ Intraday Picks", "📈 Long-term Picks"])
+
+with tab1:
+    st.markdown("#### ⚡ Intraday Trading Recommendations")
+    st.caption("For today's trading session • Auto-refreshes every minute")
+    
+    intraday_df = get_intraday_recommendations()
+    
+    if intraday_df is not None and not intraday_df.empty:
+        # Display dataframe with nice formatting
         st.dataframe(
-            recos[["Stock", "Date", "Buy_Rate", "CMP", "Target", "Upside %"]],
-            use_container_width=True, hide_index=True,
+            intraday_df[["Stock", "CMP", "Target", "Stop Loss", "Upside %", "Type", "Date"]],
+            use_container_width=True,
+            hide_index=True,
             column_config={
-                "CMP": "Price", 
-                "Target": "Goal", 
-                "Upside %": st.column_config.NumberColumn(format="%.1f%%")
+                "Stock": st.column_config.TextColumn("Stock Name", width="medium"),
+                "CMP": st.column_config.NumberColumn("Current Price", format="₹%.2f"),
+                "Target": st.column_config.NumberColumn("Target", format="₹%.2f"),
+                "Stop Loss": st.column_config.NumberColumn("Stop Loss", format="₹%.2f"),
+                "Upside %": st.column_config.NumberColumn("Upside", format="%.2f%%"),
+                "Type": st.column_config.TextColumn("Strategy", width="small"),
+                "Date": st.column_config.TextColumn("Updated", width="medium")
             }
         )
+        
+        st.info("⚠️ **Disclaimer:** These are momentum-based picks. Always use stop losses and trade with proper risk management.")
     else:
-        st.warning("Unable to fetch recommendations at the moment.")
+        st.warning("🔄 Fetching intraday recommendations... Please wait.")
+
+with tab2:
+    st.markdown("#### 📈 Long-term Investment Ideas")
+    st.caption("Swing & Positional trades • Timeframe: 2 weeks to 3 months")
     
-    # Add recommendation news
-    st.markdown("#### 📈 Stock Recommendation News")
-    reco_news = get_live_market_news()
+    longterm_df = get_longterm_recommendations()
+    
+    if longterm_df is not None and not longterm_df.empty:
+        st.dataframe(
+            longterm_df[["Stock", "CMP", "Target", "Stop Loss", "Upside %", "Timeframe", "Source", "Date"]],
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Stock": st.column_config.TextColumn("Stock Name", width="medium"),
+                "CMP": st.column_config.NumberColumn("Current Price", format="₹%.2f"),
+                "Target": st.column_config.NumberColumn("Target", format="₹%.0f"),
+                "Stop Loss": st.column_config.NumberColumn("Stop Loss", format="₹%.2f"),
+                "Upside %": st.column_config.NumberColumn("Potential Upside", format="%.2f%%"),
+                "Timeframe": st.column_config.TextColumn("Duration", width="small"),
+                "Source": st.column_config.TextColumn("Source", width="medium"),
+                "Date": st.column_config.TextColumn("Published", width="small")
+            }
+        )
+        
+        st.info("📊 **Note:** Targets are from analyst recommendations and public sources. Do your own research before investing.")
+    else:
+        st.warning("🔄 Fetching analyst recommendations... Please wait.")
+
+st.divider()
+
+# =========================
+# 📰 SECTION 4: MARKET NEWS
+# =========================
+st.subheader("📰 Live Market News & Updates")
+
+news_col1, news_col2 = st.columns(2)
+
+with news_col1:
+    st.markdown("#### 💡 Stock Recommendation News")
+    news_items = get_live_market_news()
+    
+    # Filter recommendation news
+    reco_news = [n for n in news_items if n.get('category') == 'recommendation']
+    
     if reco_news:
-        for item in reco_news[:5]:
+        for item in reco_news[:6]:
             if isinstance(item, dict) and 'title' in item:
                 title = item.get('title', 'No title')
-                with st.expander(f"📌 {title[:60]}..."):
+                with st.expander(f"📌 {title[:65]}..."):
                     st.write(f"**Source:** {item.get('publisher', 'Unknown')}")
                     if 'provider_publish_time' in item:
                         try:
-                            st.write(f"**Published:** {datetime.fromtimestamp(item['provider_publish_time']).strftime('%Y-%m-%d %H:%M')}")
+                            pub_time = datetime.fromtimestamp(item['provider_publish_time'])
+                            st.write(f"**Published:** {pub_time.strftime('%d %b, %H:%M')}")
                         except:
                             st.write(f"**Published:** Recent")
-                    if 'link' in item:
-                        st.link_button("Read Full Article", item['link'])
+                    if 'link' in item and item['link'] != '#':
+                        st.link_button("📰 Read Full Article", item['link'])
     else:
-        st.info("No recent recommendation news available.")
+        st.info("📡 Loading recommendation news...")
 
-with news_col:
-    st.markdown("#### 📰 Live Market Headlines")
-    news_items = get_live_market_news()
-    if news_items:
-        for item in news_items[:8]:
+with news_col2:
+    st.markdown("#### 📈 General Market Headlines")
+    
+    # Filter market news
+    market_news = [n for n in news_items if n.get('category') == 'market']
+    
+    if market_news:
+        for item in market_news[:6]:
             if isinstance(item, dict) and 'title' in item:
                 title = item.get('title', 'No title')
-                with st.expander(f"📰 {title[:70]}..."):
+                with st.expander(f"📰 {title[:65]}..."):
                     st.write(f"**Source:** {item.get('publisher', 'Finance News')}")
                     if 'provider_publish_time' in item:
                         try:
-                            st.write(f"**Published:** {datetime.fromtimestamp(item['provider_publish_time']).strftime('%Y-%m-%d %H:%M')}")
+                            pub_time = datetime.fromtimestamp(item['provider_publish_time'])
+                            st.write(f"**Published:** {pub_time.strftime('%d %b, %H:%M')}")
                         except:
                             st.write(f"**Published:** Recent")
-                    if 'link' in item:
-                        st.link_button("Read Full Article", item['link'])
+                    if 'link' in item and item['link'] != '#':
+                        st.link_button("📰 Read Full Article", item['link'])
     else:
-        st.info("Fetching latest market news...")
+        st.info("📡 Loading market headlines...")
 
-st.caption(f"Last sync: {datetime.now().strftime('%H:%M:%S')} | Data from Yahoo Finance & MCX India")
+st.divider()
+
+# Footer
+col1, col2 = st.columns(2)
+with col1:
+    st.caption(f"🔄 Last updated: {datetime.now().strftime('%d %b %Y, %H:%M:%S')}")
+with col2:
+    st.caption("📊 Data from Yahoo Finance, MCX India, Economic Times & Moneycontrol")
+
+st.markdown("---")
+st.markdown(
+    """
+    <div style='text-align: center; color: #888; font-size: 12px;'>
+        ⚠️ <b>Disclaimer:</b> This dashboard is for informational purposes only. Not financial advice. 
+        Always do your own research and consult a financial advisor before making investment decisions.
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+
 
 
