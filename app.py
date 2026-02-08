@@ -597,5 +597,3 @@ def get_live_market_news():
         'provider_publish_time': datetime.now().timestamp(),
         'category': 'market'
     }]
-
-
