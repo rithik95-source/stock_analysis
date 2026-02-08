@@ -66,7 +66,7 @@ for i in range(0, len(commodities), 2):
     cols = st.columns(2)
     for col, (name, symbol) in zip(cols, commodities[i:i+2]):
         with col:
-            # Time period selector
+            # Time period selector - Mobile friendly dropdown
             period_options = {
                 "1D": ("1d", "5m"),
                 "1W": ("5d", "15m"),
@@ -83,15 +83,18 @@ for i in range(0, len(commodities), 2):
             if f'period_{symbol}' not in st.session_state:
                 st.session_state[f'period_{symbol}'] = "1D"
             
-            # Create buttons for time periods
-            btn_cols = st.columns(9)
-            for idx, (label, _) in enumerate(period_options.items()):
-                with btn_cols[idx]:
-                    if st.button(label, key=f"{symbol}_{label}", use_container_width=True):
-                        st.session_state[f'period_{symbol}'] = label
+            # Dropdown selector instead of buttons
+            selected_period = st.selectbox(
+                "Time Range",
+                options=list(period_options.keys()),
+                index=list(period_options.keys()).index(st.session_state[f'period_{symbol}']),
+                key=f"select_{symbol}",
+                label_visibility="collapsed"
+            )
             
-            # Get selected period
-            selected_period = st.session_state[f'period_{symbol}']
+            # Update session state
+            st.session_state[f'period_{symbol}'] = selected_period
+            
             period, interval = period_options[selected_period]
             
             # Fetch data
@@ -157,7 +160,9 @@ for i in range(0, len(commodities), 2):
                     m3.metric("Low", f"${d_low:.2f}")
                     
                     # Create area chart with conditional coloring
-                    fig = px.area(df, x=time_col, y="Close", height=250)
+                    # Mobile-optimized height
+                    chart_height = 200
+                    fig = px.area(df, x=time_col, y="Close", height=chart_height)
                     
                     # Set color based on positive/negative
                     if is_positive:
@@ -180,6 +185,7 @@ for i in range(0, len(commodities), 2):
                         hovermode='x unified',
                         plot_bgcolor='rgba(0,0,0,0)',
                         paper_bgcolor='rgba(0,0,0,0)',
+                        font=dict(size=10)  # Smaller font for mobile
                     )
                     
                     # Auto-adjust Y-axis with padding
@@ -200,8 +206,9 @@ for i in range(0, len(commodities), 2):
                             line_dash="dot", 
                             line_color="gray",
                             opacity=0.5,
-                            annotation_text=f"Prev Close: ${prev_close:.2f}",
-                            annotation_position="right"
+                            annotation_text=f"Prev: ${prev_close:.2f}",
+                            annotation_position="right",
+                            annotation_font_size=9
                         )
                     
                     st.plotly_chart(fig, use_container_width=True)
@@ -259,7 +266,7 @@ for i in range(0, len(mcx_commodities), 2):
     cols = st.columns(2)
     for col, (name, symbol) in zip(cols, mcx_commodities[i:i+2]):
         with col:
-            # Time period selector
+            # Time period selector - Mobile friendly dropdown
             period_options = {
                 "1D": ("1d", "5m"),
                 "1W": ("5d", "15m"),
@@ -276,15 +283,18 @@ for i in range(0, len(mcx_commodities), 2):
             if f'mcx_period_{symbol}' not in st.session_state:
                 st.session_state[f'mcx_period_{symbol}'] = "1D"
             
-            # Create buttons for time periods
-            btn_cols = st.columns(9)
-            for idx, (label, _) in enumerate(period_options.items()):
-                with btn_cols[idx]:
-                    if st.button(label, key=f"mcx_{symbol}_{label}", use_container_width=True):
-                        st.session_state[f'mcx_period_{symbol}'] = label
+            # Dropdown selector instead of buttons
+            selected_period = st.selectbox(
+                "Time Range",
+                options=list(period_options.keys()),
+                index=list(period_options.keys()).index(st.session_state[f'mcx_period_{symbol}']),
+                key=f"mcx_select_{symbol}",
+                label_visibility="collapsed"
+            )
             
-            # Get selected period
-            selected_period = st.session_state[f'mcx_period_{symbol}']
+            # Update session state
+            st.session_state[f'mcx_period_{symbol}'] = selected_period
+            
             period, interval = period_options[selected_period]
             
             # Fetch data
@@ -356,7 +366,9 @@ for i in range(0, len(mcx_commodities), 2):
                     m3.metric("Low", f"₹{d_low:,.0f}")
                     
                     # Create area chart with conditional coloring
-                    fig = px.area(df, x=time_col, y="Close", height=250)
+                    # Mobile-optimized height
+                    chart_height = 200
+                    fig = px.area(df, x=time_col, y="Close", height=chart_height)
                     
                     # Set color based on positive/negative
                     if is_positive:
@@ -379,6 +391,7 @@ for i in range(0, len(mcx_commodities), 2):
                         hovermode='x unified',
                         plot_bgcolor='rgba(0,0,0,0)',
                         paper_bgcolor='rgba(0,0,0,0)',
+                        font=dict(size=10)  # Smaller font for mobile
                     )
                     
                     # Auto-adjust Y-axis with padding
@@ -399,8 +412,9 @@ for i in range(0, len(mcx_commodities), 2):
                             line_dash="dot", 
                             line_color="gray",
                             opacity=0.5,
-                            annotation_text=f"Prev Close: ₹{prev_close:,.0f}",
-                            annotation_position="right"
+                            annotation_text=f"Prev: ₹{prev_close:,.0f}",
+                            annotation_position="right",
+                            annotation_font_size=9
                         )
                     
                     st.plotly_chart(fig, use_container_width=True)
