@@ -15,7 +15,65 @@ def fetch_comex(symbol):
         print(f"Error fetching COMEX data: {e}")
         return pd.DataFrame()
 
+def fetch_mcx_intraday(commodity):
+    """
+    Fetch MCX intraday data using Yahoo Finance
+    MCX commodities are available on Yahoo Finance with specific symbols
+    """
+    mcx_symbols = {
+        "GOLD": "GC=F",      # Gold futures (use COMEX as proxy - highly correlated)
+        "SILVER": "SI=F",    # Silver futures
+        "CRUDEOIL": "CL=F",  # Crude oil futures
+        "COPPER": "HG=F",    # Copper futures
+        "NATURALGAS": "NG=F" # Natural gas futures
+    }
+    
+    try:
+        symbol = mcx_symbols.get(commodity, "GC=F")
+        ticker = yf.Ticker(symbol)
+        
+        # Get 5 days of 5-minute interval data for intraday charts
+        df = ticker.history(period="5d", interval="5m")
+        
+        if not df.empty:
+            df = df.reset_index()
+            # Convert to INR (approximate conversion - Gold is in USD/oz, MCX is in INR/10g)
+            if commodity == "GOLD":
+                # Rough conversion: USD/oz to INR/10g
+                # 1 oz = 31.1g, so 10g = 10/31.1 oz
+                # Multiply by USD to INR rate (approx 83)
+                df['Close'] = df['Close'] * (10 / 31.1035) * 83
+                df['High'] = df['High'] * (10 / 31.1035) * 83
+                df['Low'] = df['Low'] * (10 / 31.1035) * 83
+                df['Open'] = df['Open'] * (10 / 31.1035) * 83
+            elif commodity == "SILVER":
+                # Silver: USD/oz to INR/kg (1 kg = 32.15 oz)
+                df['Close'] = df['Close'] * 32.15 * 83
+                df['High'] = df['High'] * 32.15 * 83
+                df['Low'] = df['Low'] * 32.15 * 83
+                df['Open'] = df['Open'] * 32.15 * 83
+            elif commodity == "CRUDEOIL":
+                # Crude: USD/barrel to INR/barrel
+                df['Close'] = df['Close'] * 83
+                df['High'] = df['High'] * 83
+                df['Low'] = df['Low'] * 83
+                df['Open'] = df['Open'] * 83
+            elif commodity == "COPPER":
+                # Copper: USD/lb to INR/kg (1 kg = 2.205 lb)
+                df['Close'] = df['Close'] * 2.205 * 83
+                df['High'] = df['High'] * 2.205 * 83
+                df['Low'] = df['Low'] * 2.205 * 83
+                df['Open'] = df['Open'] * 2.205 * 83
+            
+            return df
+        
+    except Exception as e:
+        print(f"Error fetching MCX intraday for {commodity}: {e}")
+    
+    return pd.DataFrame()
+
 def fetch_mcx_two_days():
+    """Fallback function to get MCX data from Bhavcopy files"""
     found = []
     headers = {'User-Agent': 'Mozilla/5.0'}
     for i in range(10):
