@@ -1,5 +1,7 @@
 import streamlit as st
 import plotly.express as px
+import plotly.graph_objects as go
+import yfinance as yf
 from streamlit_autorefresh import st_autorefresh
 from data_sources import (
     fetch_comex, 
@@ -64,24 +66,101 @@ for i in range(0, len(commodities), 2):
     cols = st.columns(2)
     for col, (name, symbol) in zip(cols, commodities[i:i+2]):
         with col:
-            df = fetch_comex(symbol)
-            if not df.empty:
-                df['Date'] = df['Datetime'].dt.date
-                dates = sorted(df['Date'].unique())
-                today = df[df['Date'] == dates[-1]]
-                yday_close = df[df['Date'] == dates[-2]]["Close"].iloc[-1] if len(dates) > 1 else today["Close"].iloc[0]
+            # Time period selector
+            period_options = {
+                "1D": ("1d", "5m"),
+                "1W": ("5d", "15m"),
+                "1M": ("1mo", "1h"),
+                "3M": ("3mo", "1d"),
+                "6M": ("6mo", "1d"),
+                "1Y": ("1y", "1d"),
+                "3Y": ("3y", "1wk"),
+                "5Y": ("5y", "1wk"),
+                "Max": ("max", "1mo")
+            }
+            
+            # Use session state to track selected period per commodity
+            if f'period_{symbol}' not in st.session_state:
+                st.session_state[f'period_{symbol}'] = "1D"
+            
+            # Create buttons for time periods
+            btn_cols = st.columns(9)
+            for idx, (label, _) in enumerate(period_options.items()):
+                with btn_cols[idx]:
+                    if st.button(label, key=f"{symbol}_{label}", use_container_width=True):
+                        st.session_state[f'period_{symbol}'] = label
+            
+            # Get selected period
+            selected_period = st.session_state[f'period_{symbol}']
+            period, interval = period_options[selected_period]
+            
+            # Fetch data
+            try:
+                ticker = yf.Ticker(symbol)
+                df = ticker.history(period=period, interval=interval).reset_index()
                 
-                ltp, d_high, d_low = today["Close"].iloc[-1], today["High"].max(), today["Low"].min()
-                change = ltp - yday_close
-                
-                m1, m2, m3 = st.columns(3)
-                m1.metric(name, f"${ltp:.2f}", f"{change:.2f}", delta_color="normal")
-                m2.metric("High", f"${d_high:.2f}")
-                m3.metric("Low", f"${d_low:.2f}")
-                
-                fig = px.line(today, x="Datetime", y="Close", height=200)
-                fig.update_layout(margin=dict(l=0, r=0, t=0, b=0))
-                st.plotly_chart(fig, use_container_width=True)
+                if not df.empty:
+                    # Determine if we should use 'Date' or 'Datetime' column
+                    time_col = 'Datetime' if 'Datetime' in df.columns else 'Date'
+                    
+                    # Calculate if overall change is positive or negative
+                    first_close = df['Close'].iloc[0]
+                    last_close = df['Close'].iloc[-1]
+                    change = last_close - first_close
+                    is_positive = change >= 0
+                    
+                    # Get metrics
+                    d_high = df['High'].max()
+                    d_low = df['Low'].min()
+                    
+                    # Display metrics
+                    m1, m2, m3 = st.columns(3)
+                    m1.metric(name, f"${last_close:.2f}", f"{change:.2f}", delta_color="normal")
+                    m2.metric("High", f"${d_high:.2f}")
+                    m3.metric("Low", f"${d_low:.2f}")
+                    
+                    # Create area chart with conditional coloring
+                    fig = px.area(df, x=time_col, y="Close", height=250)
+                    
+                    # Set color based on positive/negative
+                    if is_positive:
+                        line_color = "rgba(0, 200, 83, 1)"  # Green
+                        fill_color = "rgba(0, 200, 83, 0.2)"  # Green with transparency
+                    else:
+                        line_color = "rgba(255, 71, 87, 1)"  # Red
+                        fill_color = "rgba(255, 71, 87, 0.2)"  # Red with transparency
+                    
+                    fig.update_traces(
+                        line_color=line_color,
+                        fillcolor=fill_color,
+                        hovertemplate='<b>Price</b>: $%{y:.2f}<br><b>Time</b>: %{x}<extra></extra>'
+                    )
+                    
+                    fig.update_layout(
+                        margin=dict(l=0, r=0, t=0, b=0),
+                        xaxis_title="",
+                        yaxis_title="Price ($)",
+                        hovermode='x unified',
+                        plot_bgcolor='rgba(0,0,0,0)',
+                        paper_bgcolor='rgba(0,0,0,0)',
+                    )
+                    
+                    # Add previous close line for 1D view
+                    if selected_period == "1D" and len(df) > 1:
+                        fig.add_hline(
+                            y=first_close, 
+                            line_dash="dot", 
+                            line_color="gray",
+                            opacity=0.5,
+                            annotation_text=f"Prev Close: ${first_close:.2f}",
+                            annotation_position="right"
+                        )
+                    
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.warning(f"No data available for {name}")
+            except Exception as e:
+                st.error(f"Error loading {name} data: {str(e)}")
 
 st.divider()
 
@@ -93,33 +172,144 @@ st.caption("💡 Live prices converted from international markets to INR")
 
 mcx_commodities = [("Gold", "GOLD"), ("Silver", "SILVER"), ("Crude Oil", "CRUDEOIL"), ("Copper", "COPPER")]
 
+# Conversion functions
+def convert_to_inr(df, commodity):
+    """Convert international prices to MCX INR equivalent"""
+    df = df.copy()
+    
+    if commodity == "GOLD":
+        # USD/oz to INR/10g
+        multiplier = (10 / 31.1035) * 83
+    elif commodity == "SILVER":
+        # USD/oz to INR/kg
+        multiplier = 32.15 * 83
+    elif commodity == "CRUDEOIL":
+        # USD/barrel to INR/barrel
+        multiplier = 83
+    elif commodity == "COPPER":
+        # USD/lb to INR/kg
+        multiplier = 2.205 * 83
+    else:
+        multiplier = 83
+    
+    df['Close'] = df['Close'] * multiplier
+    df['High'] = df['High'] * multiplier
+    df['Low'] = df['Low'] * multiplier
+    df['Open'] = df['Open'] * multiplier
+    
+    return df
+
+# MCX symbol mapping
+mcx_to_yahoo = {
+    "GOLD": "GC=F",
+    "SILVER": "SI=F",
+    "CRUDEOIL": "CL=F",
+    "COPPER": "HG=F"
+}
+
 for i in range(0, len(mcx_commodities), 2):
     cols = st.columns(2)
     for col, (name, symbol) in zip(cols, mcx_commodities[i:i+2]):
         with col:
-            df = fetch_mcx_intraday(symbol)
-            if not df.empty:
-                df['Date'] = df['Datetime'].dt.date
-                dates = sorted(df['Date'].unique())
-                today = df[df['Date'] == dates[-1]]
-                yday_close = df[df['Date'] == dates[-2]]["Close"].iloc[-1] if len(dates) > 1 else today["Close"].iloc[0]
+            # Time period selector
+            period_options = {
+                "1D": ("1d", "5m"),
+                "1W": ("5d", "15m"),
+                "1M": ("1mo", "1h"),
+                "3M": ("3mo", "1d"),
+                "6M": ("6mo", "1d"),
+                "1Y": ("1y", "1d"),
+                "3Y": ("3y", "1wk"),
+                "5Y": ("5y", "1wk"),
+                "Max": ("max", "1mo")
+            }
+            
+            # Use session state to track selected period per commodity
+            if f'mcx_period_{symbol}' not in st.session_state:
+                st.session_state[f'mcx_period_{symbol}'] = "1D"
+            
+            # Create buttons for time periods
+            btn_cols = st.columns(9)
+            for idx, (label, _) in enumerate(period_options.items()):
+                with btn_cols[idx]:
+                    if st.button(label, key=f"mcx_{symbol}_{label}", use_container_width=True):
+                        st.session_state[f'mcx_period_{symbol}'] = label
+            
+            # Get selected period
+            selected_period = st.session_state[f'mcx_period_{symbol}']
+            period, interval = period_options[selected_period]
+            
+            # Fetch data
+            try:
+                yahoo_symbol = mcx_to_yahoo[symbol]
+                ticker = yf.Ticker(yahoo_symbol)
+                df = ticker.history(period=period, interval=interval).reset_index()
                 
-                ltp = today["Close"].iloc[-1]
-                d_high = today["High"].max()
-                d_low = today["Low"].min()
-                change = ltp - yday_close
-                
-                m1, m2, m3 = st.columns(3)
-                m1.metric(f"MCX {name}", f"₹{ltp:,.0f}", f"{change:,.0f}", delta_color="normal")
-                m2.metric("High", f"₹{d_high:,.0f}")
-                m3.metric("Low", f"₹{d_low:,.0f}")
-                
-                fig = px.line(today, x="Datetime", y="Close", height=200)
-                fig.update_layout(margin=dict(l=0, r=0, t=0, b=0))
-                fig.update_yaxes(title_text="Price (₹)")
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.warning(f"Unable to fetch {name} data")
+                if not df.empty:
+                    # Convert to INR
+                    df = convert_to_inr(df, symbol)
+                    
+                    # Determine if we should use 'Date' or 'Datetime' column
+                    time_col = 'Datetime' if 'Datetime' in df.columns else 'Date'
+                    
+                    # Calculate if overall change is positive or negative
+                    first_close = df['Close'].iloc[0]
+                    last_close = df['Close'].iloc[-1]
+                    change = last_close - first_close
+                    is_positive = change >= 0
+                    
+                    # Get metrics
+                    d_high = df['High'].max()
+                    d_low = df['Low'].min()
+                    
+                    # Display metrics
+                    m1, m2, m3 = st.columns(3)
+                    m1.metric(f"MCX {name}", f"₹{last_close:,.0f}", f"{change:,.0f}", delta_color="normal")
+                    m2.metric("High", f"₹{d_high:,.0f}")
+                    m3.metric("Low", f"₹{d_low:,.0f}")
+                    
+                    # Create area chart with conditional coloring
+                    fig = px.area(df, x=time_col, y="Close", height=250)
+                    
+                    # Set color based on positive/negative
+                    if is_positive:
+                        line_color = "rgba(0, 200, 83, 1)"  # Green
+                        fill_color = "rgba(0, 200, 83, 0.2)"  # Green with transparency
+                    else:
+                        line_color = "rgba(255, 71, 87, 1)"  # Red
+                        fill_color = "rgba(255, 71, 87, 0.2)"  # Red with transparency
+                    
+                    fig.update_traces(
+                        line_color=line_color,
+                        fillcolor=fill_color,
+                        hovertemplate='<b>Price</b>: ₹%{y:,.0f}<br><b>Time</b>: %{x}<extra></extra>'
+                    )
+                    
+                    fig.update_layout(
+                        margin=dict(l=0, r=0, t=0, b=0),
+                        xaxis_title="",
+                        yaxis_title="Price (₹)",
+                        hovermode='x unified',
+                        plot_bgcolor='rgba(0,0,0,0)',
+                        paper_bgcolor='rgba(0,0,0,0)',
+                    )
+                    
+                    # Add previous close line for 1D view
+                    if selected_period == "1D" and len(df) > 1:
+                        fig.add_hline(
+                            y=first_close, 
+                            line_dash="dot", 
+                            line_color="gray",
+                            opacity=0.5,
+                            annotation_text=f"Prev Close: ₹{first_close:,.0f}",
+                            annotation_position="right"
+                        )
+                    
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.warning(f"No data available for {name}")
+            except Exception as e:
+                st.error(f"Error loading {name} data: {str(e)}")
 
 st.divider()
 
