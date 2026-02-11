@@ -426,66 +426,125 @@ for i in range(0, len(mcx_commodities), 2):
 st.divider()
 
 # =========================
-# 🚀 SECTION 3: STOCK RECOMMENDATIONS
+# 🚀 SECTION 3: STOCK SEARCH & RECOMMENDATIONS
 # =========================
-st.subheader("🚀 Live Stock Recommendations")
+st.subheader("🔍 Search Stock Recommendations")
+st.caption("Search any NSE stock ticker to get intraday and long-term analyst targets")
 
-# Create tabs for Intraday and Long-term
-tab1, tab2 = st.tabs(["⚡ Intraday Picks", "📈 Long-term Picks"])
+# Search input
+search_col1, search_col2 = st.columns([3, 1])
 
-with tab1:
-    st.markdown("#### ⚡ Intraday Trading Recommendations")
-    st.caption("For today's trading session • Auto-refreshes every minute")
-    
-    intraday_df = get_intraday_recommendations()
-    
-    if intraday_df is not None and not intraday_df.empty:
-        # Display dataframe with nice formatting
-        st.dataframe(
-            intraday_df[["Stock", "CMP", "Target", "Stop Loss", "Upside %", "Type", "Date"]],
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Stock": st.column_config.TextColumn("Stock Name", width="medium"),
-                "CMP": st.column_config.NumberColumn("Current Price", format="₹%.2f"),
-                "Target": st.column_config.NumberColumn("Target", format="₹%.2f"),
-                "Stop Loss": st.column_config.NumberColumn("Stop Loss", format="₹%.2f"),
-                "Upside %": st.column_config.NumberColumn("Upside", format="%.2f%%"),
-                "Type": st.column_config.TextColumn("Strategy", width="small"),
-                "Date": st.column_config.TextColumn("Updated", width="medium")
-            }
-        )
+with search_col1:
+    ticker_input = st.text_input(
+        "Enter NSE Stock Ticker",
+        placeholder="e.g., RELIANCE, TCS, INFY, HDFCBANK",
+        help="Enter the stock symbol (e.g., RELIANCE for Reliance Industries)",
+        label_visibility="collapsed"
+    )
+
+with search_col2:
+    search_button = st.button("🔍 Search", use_container_width=True, type="primary")
+
+# Display results when search is triggered
+if search_button and ticker_input:
+    with st.spinner(f"Searching for {ticker_input.upper()}..."):
+        from data_sources import search_stock_recommendations
         
-        st.info("⚠️ **Disclaimer:** These are momentum-based picks. Always use stop losses and trade with proper risk management.")
-    else:
-        st.warning("🔄 Fetching intraday recommendations... Please wait.")
-
-with tab2:
-    st.markdown("#### 📈 Long-term Investment Ideas")
-    st.caption("Swing & Positional trades • Timeframe: 2 weeks to 3 months")
-    
-    longterm_df = get_longterm_recommendations()
-    
-    if longterm_df is not None and not longterm_df.empty:
-        st.dataframe(
-            longterm_df[["Stock", "CMP", "Target", "Stop Loss", "Upside %", "Timeframe", "Source", "Date"]],
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Stock": st.column_config.TextColumn("Stock Name", width="medium"),
-                "CMP": st.column_config.NumberColumn("Current Price", format="₹%.2f"),
-                "Target": st.column_config.NumberColumn("Target", format="₹%.0f"),
-                "Stop Loss": st.column_config.NumberColumn("Stop Loss", format="₹%.2f"),
-                "Upside %": st.column_config.NumberColumn("Potential Upside", format="%.2f%%"),
-                "Timeframe": st.column_config.TextColumn("Duration", width="small"),
-                "Source": st.column_config.TextColumn("Source", width="medium"),
-                "Date": st.column_config.TextColumn("Published", width="small")
-            }
-        )
+        result = search_stock_recommendations(ticker_input.upper())
         
-        st.info("📊 **Note:** Targets are from analyst recommendations and public sources. Do your own research before investing.")
-    else:
-        st.warning("🔄 Fetching analyst recommendations... Please wait.")
+        if result['error']:
+            st.error(f"❌ {result['error']}")
+        else:
+            # Stock Header
+            st.markdown(f"### {result['name']} ({result['symbol']})")
+            st.metric("Current Market Price", f"₹{result['cmp']:,.2f}")
+            
+            st.divider()
+            
+            # Create two columns for Intraday and Long-term
+            intra_col, long_col = st.columns(2)
+            
+            # INTRADAY RECOMMENDATIONS
+            with intra_col:
+                st.markdown("#### ⚡ Intraday Analysis")
+                
+                if result['intraday'] and result['intraday'].get('available'):
+                    intra = result['intraday']
+                    
+                    # Recommendation badge
+                    rec_color = "🟢" if intra['recommendation'] == "BUY" else "🟡" if intra['recommendation'] == "NEUTRAL" else "🔵"
+                    st.markdown(f"{rec_color} **{intra['recommendation']}**")
+                    st.caption(intra['signal'])
+                    
+                    # Metrics
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.metric("Target", f"₹{intra['target']:,.2f}", f"{intra['upside_pct']:+.2f}%")
+                    with col2:
+                        st.metric("Stop Loss", f"₹{intra['stop_loss']:,.2f}")
+                    
+                    # Range
+                    st.markdown("**Today's Range**")
+                    st.caption(f"High: ₹{intra['day_high']:,.2f} | Low: ₹{intra['day_low']:,.2f}")
+                    st.caption(f"Momentum: {intra['momentum_pct']:+.2f}%")
+                    
+                else:
+                    st.info("ℹ️ " + result['intraday'].get('message', 'Not available'))
+            
+            # LONG-TERM RECOMMENDATIONS
+            with long_col:
+                st.markdown("#### 📈 Long-term Targets")
+                
+                if result['longterm'] and result['longterm'].get('available'):
+                    longterm = result['longterm']
+                    
+                    # Recommendation badge
+                    rec_color = "🟢" if longterm['recommendation'] == "BUY" else "🔴" if longterm['recommendation'] == "SELL" else "🟡"
+                    st.markdown(f"{rec_color} **{longterm['recommendation']}**")
+                    st.caption(f"Based on {longterm['num_analysts']} analyst(s) | {longterm['timeframe']}")
+                    
+                    # Average Target
+                    st.metric(
+                        "Average Target", 
+                        f"₹{longterm['avg_target']:,.2f}",
+                        f"{longterm['avg_upside_pct']:+.2f}%"
+                    )
+                    
+                    # Min/Max Targets
+                    if longterm['min_target'] and longterm['max_target']:
+                        st.markdown("**Analyst Target Range**")
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.caption(f"**Min:** ₹{longterm['min_target']:,.2f}")
+                            st.caption(f"Upside: {longterm['min_upside_pct']:+.2f}%")
+                        with col2:
+                            st.caption(f"**Max:** ₹{longterm['max_target']:,.2f}")
+                            st.caption(f"Upside: {longterm['max_upside_pct']:+.2f}%")
+                else:
+                    st.info("ℹ️ " + result['longterm'].get('message', 'Not available'))
+
+elif ticker_input and not search_button:
+    st.info("👆 Click Search button to get recommendations")
+else:
+    # Show popular stocks as examples
+    st.markdown("#### 💡 Popular Stocks")
+    st.caption("Try searching: RELIANCE, TCS, INFY, HDFCBANK, ICICIBANK, SBIN, BHARTIARTL, ITC, WIPRO, LT")
+    
+    # Quick search buttons
+    st.markdown("**Quick Search:**")
+    quick_cols = st.columns(5)
+    popular = ["RELIANCE", "TCS", "INFY", "HDFCBANK", "SBIN"]
+    
+    for idx, stock in enumerate(popular):
+        with quick_cols[idx]:
+            if st.button(stock, key=f"quick_{stock}", use_container_width=True):
+                st.session_state['search_ticker'] = stock
+                st.rerun()
+
+# Handle quick search
+if 'search_ticker' in st.session_state:
+    ticker_input = st.session_state['search_ticker']
+    del st.session_state['search_ticker']
 
 st.divider()
 
