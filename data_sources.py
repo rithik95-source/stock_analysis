@@ -456,111 +456,157 @@ def get_nse_symbol(stock_name):
     return f"{cleaned}.NS"
 
 def get_live_market_news():
-    """Get market news from multiple RSS sources"""
+    """Get market news from multiple RSS sources with robust error handling"""
     all_news = []
     
-    # Source 1: Economic Times Stock Recommendations
+    # Source 1: Yahoo Finance India (Most reliable)
+    try:
+        for sym in ["^NSEI", "^BSESN"]:
+            try:
+                ticker = yf.Ticker(sym)
+                news = ticker.news
+                if news:
+                    for item in news[:5]:
+                        if isinstance(item, dict) and 'title' in item:
+                            item.setdefault('publisher', 'Yahoo Finance')
+                            item.setdefault('link', item.get('link', '#'))
+                            if 'providerPublishTime' in item:
+                                item['provider_publish_time'] = item['providerPublishTime']
+                            else:
+                                item['provider_publish_time'] = datetime.now().timestamp()
+                            item['category'] = 'market'
+                            all_news.append(item)
+            except:
+                continue
+    except Exception as e:
+        print(f"Yahoo Finance error: {e}")
+    
+    # Source 2: Moneycontrol Latest News
+    try:
+        mc_latest = "https://www.moneycontrol.com/rss/latestnews.xml"
+        feed = feedparser.parse(mc_latest)
+        
+        if feed and hasattr(feed, 'entries'):
+            for entry in feed.entries[:10]:
+                try:
+                    title_lower = entry.title.lower()
+                    if any(word in title_lower for word in ['stock', 'market', 'nifty', 'sensex', 'share', 'trading', 'invest', 'equity']):
+                        news_item = {
+                            'title': entry.title,
+                            'publisher': 'Moneycontrol',
+                            'link': entry.link if hasattr(entry, 'link') else '#',
+                            'provider_publish_time': datetime(*entry.published_parsed[:6]).timestamp() if hasattr(entry, 'published_parsed') else datetime.now().timestamp(),
+                            'category': 'market'
+                        }
+                        all_news.append(news_item)
+                except:
+                    continue
+    except Exception as e:
+        print(f"Moneycontrol Latest RSS error: {e}")
+    
+    # Source 3: Economic Times Stock Recommendations
     try:
         et_reco_rss = "https://economictimes.indiatimes.com/markets/stocks/recos/rssfeeds/1977021501.cms"
         feed = feedparser.parse(et_reco_rss)
         
-        for entry in feed.entries[:6]:
-            news_item = {
-                'title': entry.title,
-                'publisher': 'ET - Stock Picks',
-                'link': entry.link,
-                'provider_publish_time': datetime(*entry.published_parsed[:6]).timestamp() if hasattr(entry, 'published_parsed') else datetime.now().timestamp(),
-                'category': 'recommendation'
-            }
-            all_news.append(news_item)
+        if feed and hasattr(feed, 'entries'):
+            for entry in feed.entries[:8]:
+                try:
+                    news_item = {
+                        'title': entry.title,
+                        'publisher': 'ET - Stock Picks',
+                        'link': entry.link if hasattr(entry, 'link') else '#',
+                        'provider_publish_time': datetime(*entry.published_parsed[:6]).timestamp() if hasattr(entry, 'published_parsed') else datetime.now().timestamp(),
+                        'category': 'recommendation'
+                    }
+                    all_news.append(news_item)
+                except:
+                    continue
     except Exception as e:
         print(f"ET Reco RSS error: {e}")
     
-    # Source 2: Economic Times Market News
+    # Source 4: Economic Times Market News
     try:
         et_market_rss = "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms"
         feed = feedparser.parse(et_market_rss)
         
-        for entry in feed.entries[:6]:
-            news_item = {
-                'title': entry.title,
-                'publisher': 'Economic Times',
-                'link': entry.link,
-                'provider_publish_time': datetime(*entry.published_parsed[:6]).timestamp() if hasattr(entry, 'published_parsed') else datetime.now().timestamp(),
-                'category': 'market'
-            }
-            all_news.append(news_item)
+        if feed and hasattr(feed, 'entries'):
+            for entry in feed.entries[:8]:
+                try:
+                    news_item = {
+                        'title': entry.title,
+                        'publisher': 'Economic Times',
+                        'link': entry.link if hasattr(entry, 'link') else '#',
+                        'provider_publish_time': datetime(*entry.published_parsed[:6]).timestamp() if hasattr(entry, 'published_parsed') else datetime.now().timestamp(),
+                        'category': 'market'
+                    }
+                    all_news.append(news_item)
+                except:
+                    continue
     except Exception as e:
         print(f"ET Market RSS error: {e}")
     
-    # Source 3: Moneycontrol Market Reports
+    # Source 5: Business Standard Markets
     try:
-        mc_rss = "https://www.moneycontrol.com/rss/marketreports.xml"
-        feed = feedparser.parse(mc_rss)
+        bs_rss = "https://www.business-standard.com/rss/markets-106.rss"
+        feed = feedparser.parse(bs_rss)
         
-        for entry in feed.entries[:6]:
-            news_item = {
-                'title': entry.title,
-                'publisher': 'Moneycontrol',
-                'link': entry.link,
-                'provider_publish_time': datetime(*entry.published_parsed[:6]).timestamp() if hasattr(entry, 'published_parsed') else datetime.now().timestamp(),
-                'category': 'market'
-            }
-            all_news.append(news_item)
+        if feed and hasattr(feed, 'entries'):
+            for entry in feed.entries[:6]:
+                try:
+                    news_item = {
+                        'title': entry.title,
+                        'publisher': 'Business Standard',
+                        'link': entry.link if hasattr(entry, 'link') else '#',
+                        'provider_publish_time': datetime(*entry.published_parsed[:6]).timestamp() if hasattr(entry, 'published_parsed') else datetime.now().timestamp(),
+                        'category': 'market'
+                    }
+                    all_news.append(news_item)
+                except:
+                    continue
     except Exception as e:
-        print(f"Moneycontrol RSS error: {e}")
+        print(f"Business Standard RSS error: {e}")
     
-    # Source 4: Moneycontrol News
-    try:
-        mc_news_rss = "https://www.moneycontrol.com/rss/latestnews.xml"
-        feed = feedparser.parse(mc_news_rss)
+    # If we have news, sort by time and remove duplicates
+    if all_news:
+        # Sort by publish time (most recent first)
+        try:
+            all_news.sort(key=lambda x: x.get('provider_publish_time', 0), reverse=True)
+        except:
+            pass
         
-        for entry in feed.entries[:5]:
-            if any(word in entry.title.lower() for word in ['stock', 'market', 'nifty', 'sensex', 'share']):
-                news_item = {
-                    'title': entry.title,
-                    'publisher': 'Moneycontrol',
-                    'link': entry.link,
-                    'provider_publish_time': datetime(*entry.published_parsed[:6]).timestamp() if hasattr(entry, 'published_parsed') else datetime.now().timestamp(),
-                    'category': 'market'
-                }
-                all_news.append(news_item)
-    except Exception as e:
-        print(f"Moneycontrol News RSS error: {e}")
-    
-    # Source 5: Yahoo Finance India
-    try:
-        for sym in ["^NSEI", "^BSESN"]:
-            ticker = yf.Ticker(sym)
-            news = ticker.news
-            if news:
-                for item in news[:3]:
-                    if isinstance(item, dict) and 'title' in item:
-                        item.setdefault('publisher', 'Yahoo Finance')
-                        item.setdefault('link', '#')
-                        if 'providerPublishTime' in item:
-                            item['provider_publish_time'] = item['providerPublishTime']
-                        else:
-                            item['provider_publish_time'] = datetime.now().timestamp()
-                        item['category'] = 'market'
-                        all_news.append(item)
-    except Exception as e:
-        print(f"Yahoo Finance error: {e}")
-    
-    # Remove duplicates
-    unique_news = []
-    seen_titles = set()
-    for item in all_news:
-        if isinstance(item, dict) and 'title' in item:
-            title_key = item['title'][:60].lower()
-            if title_key not in seen_titles:
-                seen_titles.add(title_key)
-                unique_news.append(item)
-    
-    return unique_news[:20] if unique_news else [{
-        'title': 'Market Dashboard - Loading News...',
-        'publisher': 'System',
-        'link': '#',
-        'provider_publish_time': datetime.now().timestamp(),
-        'category': 'market'
-    }]
+        # Remove duplicates by title
+        unique_news = []
+        seen_titles = set()
+        for item in all_news:
+            try:
+                if isinstance(item, dict) and 'title' in item:
+                    title_key = item['title'][:60].lower()
+                    if title_key not in seen_titles:
+                        seen_titles.add(title_key)
+                        unique_news.append(item)
+            except:
+                continue
+        
+        return unique_news[:25] if unique_news else generate_fallback_news()
+    else:
+        return generate_fallback_news()
+
+def generate_fallback_news():
+    """Generate fallback news when all sources fail"""
+    return [
+        {
+            'title': 'Market Dashboard Live - Auto-refreshing every 30 seconds',
+            'publisher': 'System',
+            'link': '#',
+            'provider_publish_time': datetime.now().timestamp(),
+            'category': 'market'
+        },
+        {
+            'title': 'Loading latest market news... Please wait',
+            'publisher': 'System',
+            'link': '#',
+            'provider_publish_time': datetime.now().timestamp(),
+            'category': 'market'
+        }
+    ]
