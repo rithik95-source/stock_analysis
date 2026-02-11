@@ -430,57 +430,6 @@ def get_longterm_recommendations():
         "Date": datetime.now().strftime('%Y-%m-%d'),
         "Source": "System"
     }])
-                                    continue
-    except Exception as e:
-        print(f"Moneycontrol error: {e}")
-    
-    # Source 3: Yahoo Finance Analyst Recommendations
-    try:
-        top_stocks = ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", 
-                     "ICICIBANK.NS", "SBIN.NS", "BHARTIARTL.NS", "ITC.NS",
-                     "WIPRO.NS", "AXISBANK.NS"]
-        
-        for symbol in top_stocks[:6]:
-            try:
-                ticker = yf.Ticker(symbol)
-                info = ticker.info
-                cmp = ticker.fast_info.get('lastPrice', 0)
-                
-                # Get analyst target price
-                target = info.get('targetMeanPrice', 0)
-                recommendation = info.get('recommendationKey', 'hold')
-                
-                if cmp > 0 and target > 0 and recommendation in ['buy', 'strong_buy']:
-                    upside = ((target - cmp) / cmp) * 100
-                    
-                    if upside > 5:  # Only show if upside > 5%
-                        stop_loss = cmp * 0.90
-                        
-                        longterm_picks.append({
-                            "Stock": info.get('shortName', symbol.replace('.NS', '')),
-                            "Symbol": symbol,
-                            "CMP": round(cmp, 2),
-                            "Target": round(target, 0),
-                            "Stop Loss": round(stop_loss, 2),
-                            "Upside %": round(upside, 2),
-                            "Type": "Analyst",
-                            "Timeframe": "1-3 months",
-                            "Date": datetime.now().strftime('%Y-%m-%d'),
-                            "Source": "Yahoo Finance"
-                        })
-            except:
-                continue
-    except Exception as e:
-        print(f"Yahoo Finance error: {e}")
-    
-    if longterm_picks:
-        df = pd.DataFrame(longterm_picks)
-        # Remove duplicates, keep best upside
-        df = df.sort_values('Upside %', ascending=False)
-        df = df.drop_duplicates(subset=['Stock'], keep='first')
-        return df.head(8)
-    
-    return pd.DataFrame()
 
 def search_stock_recommendations(ticker_symbol):
     """
