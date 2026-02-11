@@ -90,244 +90,346 @@ def fetch_mcx_two_days():
     return (found[0], found[1]) if len(found) >= 2 else (pd.DataFrame(), pd.DataFrame())
 
 def get_intraday_recommendations():
-    """Get intraday trading recommendations from Investing.com and TradingView"""
+    """Get intraday trading recommendations with robust error handling"""
     intraday_picks = []
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
     
-    # Source 1: Screener.in - Top gainers/losers (intraday momentum)
+    # Method 1: Use Yahoo Finance trending stocks with momentum
     try:
-        url = "https://www.screener.in/api/screens/top-gainers/?sort=-pChange&order=desc&page=1"
-        response = requests.get(url, headers=headers, timeout=10)
-        
-        if response.status_code == 200:
-            data = response.json()
-            results = data.get('results', [])[:5]
-            
-            for stock in results:
-                symbol = f"{stock.get('short_name', '')}.NS"
-                try:
-                    ticker = yf.Ticker(symbol)
-                    cmp = ticker.fast_info.get('lastPrice', 0)
-                    
-                    if cmp > 0:
-                        # Intraday target: 2-3% above current price
-                        intraday_target = cmp * 1.025
-                        stop_loss = cmp * 0.985  # 1.5% stop loss
-                        
-                        intraday_picks.append({
-                            "Stock": stock.get('name', 'Unknown'),
-                            "Symbol": symbol,
-                            "CMP": round(cmp, 2),
-                            "Target": round(intraday_target, 2),
-                            "Stop Loss": round(stop_loss, 2),
-                            "Upside %": 2.5,
-                            "Type": "Momentum",
-                            "Timeframe": "Intraday",
-                            "Date": datetime.now().strftime('%Y-%m-%d %H:%M')
-                        })
-                except:
-                    continue
-    except Exception as e:
-        print(f"Screener.in error: {e}")
-    
-    # Source 2: NSE India - Most Active Stocks (volume leaders)
-    try:
-        nse_url = "https://www.nseindia.com/api/live-analysis-variations?index=gainers"
-        nse_headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'application/json',
-            'Accept-Language': 'en-US,en;q=0.9',
-        }
-        
-        session = requests.Session()
-        session.get("https://www.nseindia.com", headers=nse_headers, timeout=10)
-        
-        response = session.get(nse_url, headers=nse_headers, timeout=10)
-        
-        if response.status_code == 200:
-            data = response.json()
-            stocks = data.get('NIFTY', [])[:3]
-            
-            for stock in stocks:
-                symbol_nse = stock.get('symbol', '')
-                symbol = f"{symbol_nse}.NS"
-                
-                try:
-                    ticker = yf.Ticker(symbol)
-                    cmp = ticker.fast_info.get('lastPrice', 0)
-                    
-                    if cmp > 0:
-                        pct_change = stock.get('pChange', 2.0)
-                        intraday_target = cmp * (1 + (pct_change / 100) * 0.5)
-                        stop_loss = cmp * 0.98
-                        
-                        intraday_picks.append({
-                            "Stock": stock.get('meta', {}).get('companyName', symbol_nse),
-                            "Symbol": symbol,
-                            "CMP": round(cmp, 2),
-                            "Target": round(intraday_target, 2),
-                            "Stop Loss": round(stop_loss, 2),
-                            "Upside %": round((intraday_target - cmp) / cmp * 100, 2),
-                            "Type": "Gainer",
-                            "Timeframe": "Intraday",
-                            "Date": datetime.now().strftime('%Y-%m-%d %H:%M')
-                        })
-                except:
-                    continue
-    except Exception as e:
-        print(f"NSE India error: {e}")
-    
-    # Fallback: Use technical indicators on popular stocks
-    if len(intraday_picks) < 3:
-        popular_stocks = [
-            ("RELIANCE.NS", "Reliance"),
-            ("TCS.NS", "TCS"),
-            ("INFY.NS", "Infosys"),
-            ("HDFCBANK.NS", "HDFC Bank"),
-            ("ICICIBANK.NS", "ICICI Bank")
+        nifty50_symbols = [
+            "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS",
+            "SBIN.NS", "BHARTIARTL.NS", "ITC.NS", "KOTAKBANK.NS", "LT.NS",
+            "AXISBANK.NS", "WIPRO.NS", "MARUTI.NS", "TITAN.NS", "SUNPHARMA.NS"
         ]
         
-        for symbol, name in popular_stocks[:3]:
+        momentum_stocks = []
+        
+        for symbol in nifty50_symbols:
             try:
                 ticker = yf.Ticker(symbol)
-                hist = ticker.history(period="5d", interval="5m")
+                hist = ticker.history(period="2d", interval="5m")
                 
-                if not hist.empty:
+                if not hist.empty and len(hist) > 20:
                     cmp = hist['Close'].iloc[-1]
-                    # Simple momentum: if trending up in last hour
-                    recent = hist.tail(12)  # Last hour (12 x 5min)
-                    if recent['Close'].iloc[-1] > recent['Close'].iloc[0]:
-                        intraday_target = cmp * 1.015
-                        stop_loss = cmp * 0.99
-                        
-                        intraday_picks.append({
-                            "Stock": name,
-                            "Symbol": symbol,
-                            "CMP": round(cmp, 2),
-                            "Target": round(intraday_target, 2),
-                            "Stop Loss": round(stop_loss, 2),
-                            "Upside %": 1.5,
-                            "Type": "Technical",
-                            "Timeframe": "Intraday",
-                            "Date": datetime.now().strftime('%Y-%m-%d %H:%M')
+                    open_price = hist['Open'].iloc[0]
+                    
+                    # Calculate intraday change
+                    change_pct = ((cmp - open_price) / open_price) * 100
+                    
+                    # Only stocks with momentum (>0.5% move)
+                    if abs(change_pct) > 0.5:
+                        momentum_stocks.append({
+                            'symbol': symbol,
+                            'name': symbol.replace('.NS', ''),
+                            'cmp': cmp,
+                            'change_pct': change_pct
                         })
             except:
                 continue
+        
+        # Sort by absolute momentum
+        momentum_stocks.sort(key=lambda x: abs(x['change_pct']), reverse=True)
+        
+        # Take top 4 momentum stocks
+        for stock in momentum_stocks[:4]:
+            try:
+                cmp = stock['cmp']
+                change_pct = stock['change_pct']
+                
+                # Set targets based on momentum
+                if change_pct > 0:
+                    intraday_target = cmp * 1.02  # 2% target
+                    stop_loss = cmp * 0.985  # 1.5% stop loss
+                    pick_type = "Momentum Up"
+                else:
+                    intraday_target = cmp * 1.015  # 1.5% target for reversal
+                    stop_loss = cmp * 0.99  # 1% stop loss
+                    pick_type = "Reversal Play"
+                
+                upside = ((intraday_target - cmp) / cmp) * 100
+                
+                intraday_picks.append({
+                    "Stock": stock['name'],
+                    "Symbol": stock['symbol'],
+                    "CMP": round(cmp, 2),
+                    "Target": round(intraday_target, 2),
+                    "Stop Loss": round(stop_loss, 2),
+                    "Upside %": round(upside, 2),
+                    "Type": pick_type,
+                    "Timeframe": "Intraday",
+                    "Date": datetime.now().strftime('%Y-%m-%d %H:%M')
+                })
+            except:
+                continue
+                
+    except Exception as e:
+        print(f"Yahoo momentum screening error: {e}")
+    
+    # Method 2: Screener.in API (if available)
+    if len(intraday_picks) < 3:
+        try:
+            url = "https://www.screener.in/api/screens/top-gainers/?sort=-pChange&order=desc&page=1"
+            response = requests.get(url, headers=headers, timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                results = data.get('results', [])[:5]
+                
+                for stock in results:
+                    try:
+                        symbol = f"{stock.get('short_name', '')}.NS"
+                        ticker = yf.Ticker(symbol)
+                        cmp = ticker.fast_info.get('lastPrice', 0)
+                        
+                        if cmp > 0:
+                            intraday_target = cmp * 1.025
+                            stop_loss = cmp * 0.985
+                            
+                            intraday_picks.append({
+                                "Stock": stock.get('name', 'Unknown'),
+                                "Symbol": symbol,
+                                "CMP": round(cmp, 2),
+                                "Target": round(intraday_target, 2),
+                                "Stop Loss": round(stop_loss, 2),
+                                "Upside %": 2.5,
+                                "Type": "Top Gainer",
+                                "Timeframe": "Intraday",
+                                "Date": datetime.now().strftime('%Y-%m-%d %H:%M')
+                            })
+                    except:
+                        continue
+        except Exception as e:
+            print(f"Screener.in error: {e}")
+    
+    # Fallback: If still empty, use safe blue chips with technical signals
+    if len(intraday_picks) < 2:
+        try:
+            fallback_stocks = [
+                ("RELIANCE.NS", "Reliance"),
+                ("TCS.NS", "TCS"),
+                ("INFY.NS", "Infosys"),
+                ("HDFCBANK.NS", "HDFC Bank")
+            ]
+            
+            for symbol, name in fallback_stocks[:3]:
+                try:
+                    ticker = yf.Ticker(symbol)
+                    hist = ticker.history(period="5d", interval="5m")
+                    
+                    if not hist.empty:
+                        cmp = hist['Close'].iloc[-1]
+                        recent = hist.tail(12)  # Last hour
+                        
+                        if recent['Close'].iloc[-1] > recent['Close'].iloc[0]:
+                            intraday_target = cmp * 1.015
+                            stop_loss = cmp * 0.99
+                            
+                            intraday_picks.append({
+                                "Stock": name,
+                                "Symbol": symbol,
+                                "CMP": round(cmp, 2),
+                                "Target": round(intraday_target, 2),
+                                "Stop Loss": round(stop_loss, 2),
+                                "Upside %": 1.5,
+                                "Type": "Technical",
+                                "Timeframe": "Intraday",
+                                "Date": datetime.now().strftime('%Y-%m-%d %H:%M')
+                            })
+                except:
+                    continue
+        except Exception as e:
+            print(f"Fallback stocks error: {e}")
     
     if intraday_picks:
         df = pd.DataFrame(intraday_picks)
         return df.drop_duplicates(subset=['Stock'], keep='first').head(6)
     
-    return pd.DataFrame()
+    # Last resort fallback
+    return pd.DataFrame([{
+        "Stock": "Loading...",
+        "Symbol": "-",
+        "CMP": 0,
+        "Target": 0,
+        "Stop Loss": 0,
+        "Upside %": 0,
+        "Type": "Refreshing",
+        "Timeframe": "Intraday",
+        "Date": datetime.now().strftime('%Y-%m-%d %H:%M')
+    }])
 
 def get_longterm_recommendations():
-    """Get long-term (swing/positional) recommendations from analysts"""
+    """Get long-term (swing/positional) recommendations with robust error handling"""
     longterm_picks = []
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
     
-    # Source 1: Economic Times Stock Recommendations RSS
+    # Method 1: Yahoo Finance Analyst Recommendations (Most reliable)
     try:
-        et_reco_rss = "https://economictimes.indiatimes.com/markets/stocks/recos/rssfeeds/1977021501.cms"
-        feed = feedparser.parse(et_reco_rss)
+        top_stocks = [
+            "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS",
+            "SBIN.NS", "BHARTIARTL.NS", "ITC.NS", "WIPRO.NS", "AXISBANK.NS",
+            "KOTAKBANK.NS", "LT.NS", "MARUTI.NS", "TITAN.NS", "SUNPHARMA.NS"
+        ]
         
-        for entry in feed.entries[:8]:
-            title = entry.title
-            
-            # Parse: "Stock Name: Buy/Sell, Target Rs XX"
-            stock_match = re.search(r'^([^:]+?)(?:\s*-|\s*:)', title)
-            action_match = re.search(r'\b(Buy|Accumulate|Hold)\b', title, re.IGNORECASE)
-            target_match = re.search(r'(?:target|tgt|price target).*?Rs\.?\s*([\d,]+)', title, re.IGNORECASE)
-            
-            if stock_match and action_match:
-                stock_name = stock_match.group(1).strip()
-                action = action_match.group(1).upper()
+        for symbol in top_stocks:
+            try:
+                ticker = yf.Ticker(symbol)
+                info = ticker.info
+                cmp = ticker.fast_info.get('lastPrice', 0)
                 
-                if action in ["BUY", "ACCUMULATE"]:
-                    target = None
-                    if target_match:
-                        target = float(target_match.group(1).replace(',', ''))
+                # Get analyst target price and recommendation
+                target = info.get('targetMeanPrice', 0)
+                recommendation = info.get('recommendationKey', 'hold')
+                
+                if cmp > 0 and target > 0 and recommendation in ['buy', 'strong_buy']:
+                    upside = ((target - cmp) / cmp) * 100
                     
-                    symbol = get_nse_symbol(stock_name)
-                    if symbol:
-                        try:
-                            ticker = yf.Ticker(symbol)
-                            cmp = ticker.fast_info.get('lastPrice', 0)
-                            
-                            if cmp > 0:
-                                if not target:
-                                    target = cmp * 1.15  # Assume 15% target if not specified
-                                
-                                upside = ((target - cmp) / cmp) * 100
-                                stop_loss = cmp * 0.92  # 8% stop loss for swing
-                                
-                                pub_date = entry.get('published', datetime.now().strftime('%Y-%m-%d'))[:10]
-                                
-                                longterm_picks.append({
-                                    "Stock": stock_name,
-                                    "Symbol": symbol,
-                                    "CMP": round(cmp, 2),
-                                    "Target": round(target, 0),
-                                    "Stop Loss": round(stop_loss, 2),
-                                    "Upside %": round(upside, 2),
-                                    "Type": action.capitalize(),
-                                    "Timeframe": "2-4 weeks",
-                                    "Date": pub_date,
-                                    "Source": "ET Analysts"
-                                })
-                        except:
-                            continue
+                    # Only show if upside > 5%
+                    if upside > 5:
+                        stop_loss = cmp * 0.90
+                        
+                        longterm_picks.append({
+                            "Stock": info.get('shortName', symbol.replace('.NS', '')),
+                            "Symbol": symbol,
+                            "CMP": round(cmp, 2),
+                            "Target": round(target, 0),
+                            "Stop Loss": round(stop_loss, 2),
+                            "Upside %": round(upside, 2),
+                            "Type": "Analyst",
+                            "Timeframe": "1-3 months",
+                            "Date": datetime.now().strftime('%Y-%m-%d'),
+                            "Source": "Yahoo Finance"
+                        })
+            except:
+                continue
     except Exception as e:
-        print(f"ET RSS error: {e}")
+        print(f"Yahoo Finance analyst reco error: {e}")
     
-    # Source 2: Moneycontrol Stock Ideas
-    try:
-        mc_url = "https://www.moneycontrol.com/news/business/stocks/"
-        response = requests.get(mc_url, headers=headers, timeout=10)
-        
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.content, 'html.parser')
-            articles = soup.find_all('li', class_='clearfix')[:5]
+    # Method 2: Economic Times Stock Recommendations RSS
+    if len(longterm_picks) < 5:
+        try:
+            et_reco_rss = "https://economictimes.indiatimes.com/markets/stocks/recos/rssfeeds/1977021501.cms"
+            feed = feedparser.parse(et_reco_rss)
             
-            for article in articles:
-                title_elem = article.find('h2')
-                if title_elem:
-                    title = title_elem.get_text(strip=True)
-                    
-                    # Look for buy recommendations
-                    if any(word in title.lower() for word in ['buy', 'target', 'pick']):
-                        # Extract stock name
-                        stock_match = re.search(r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*(?:\s+Ltd)?)\b', title)
-                        if stock_match:
-                            stock_name = stock_match.group(1)
-                            symbol = get_nse_symbol(stock_name)
+            if feed and hasattr(feed, 'entries'):
+                for entry in feed.entries[:10]:
+                    try:
+                        title = entry.title
+                        
+                        # Parse: "Stock Name: Buy/Sell, Target Rs XX"
+                        stock_match = re.search(r'^([^:]+?)(?:\s*-|\s*:)', title)
+                        action_match = re.search(r'\b(Buy|Accumulate)\b', title, re.IGNORECASE)
+                        target_match = re.search(r'(?:target|tgt|price target).*?Rs\.?\s*([\d,]+)', title, re.IGNORECASE)
+                        
+                        if stock_match and action_match:
+                            stock_name = stock_match.group(1).strip()
+                            action = action_match.group(1).upper()
                             
+                            target = None
+                            if target_match:
+                                target = float(target_match.group(1).replace(',', ''))
+                            
+                            symbol = get_nse_symbol(stock_name)
                             if symbol:
                                 try:
                                     ticker = yf.Ticker(symbol)
                                     cmp = ticker.fast_info.get('lastPrice', 0)
                                     
                                     if cmp > 0:
-                                        # Conservative 12% target
-                                        target = cmp * 1.12
-                                        stop_loss = cmp * 0.93
+                                        if not target:
+                                            target = cmp * 1.15
                                         
-                                        longterm_picks.append({
-                                            "Stock": stock_name,
-                                            "Symbol": symbol,
-                                            "CMP": round(cmp, 2),
-                                            "Target": round(target, 0),
-                                            "Stop Loss": round(stop_loss, 2),
-                                            "Upside %": 12.0,
-                                            "Type": "Research",
-                                            "Timeframe": "3-6 weeks",
-                                            "Date": datetime.now().strftime('%Y-%m-%d'),
-                                            "Source": "Moneycontrol"
-                                        })
+                                        upside = ((target - cmp) / cmp) * 100
+                                        
+                                        if upside > 3:  # Only show if upside > 3%
+                                            stop_loss = cmp * 0.92
+                                            pub_date = entry.get('published', datetime.now().strftime('%Y-%m-%d'))[:10]
+                                            
+                                            longterm_picks.append({
+                                                "Stock": stock_name,
+                                                "Symbol": symbol,
+                                                "CMP": round(cmp, 2),
+                                                "Target": round(target, 0),
+                                                "Stop Loss": round(stop_loss, 2),
+                                                "Upside %": round(upside, 2),
+                                                "Type": action.capitalize(),
+                                                "Timeframe": "2-4 weeks",
+                                                "Date": pub_date,
+                                                "Source": "ET Analysts"
+                                            })
                                 except:
+                                    continue
+                    except:
+                        continue
+        except Exception as e:
+            print(f"ET RSS error: {e}")
+    
+    # Method 3: Technical analysis on blue chips (fallback)
+    if len(longterm_picks) < 3:
+        try:
+            blue_chips = [
+                ("RELIANCE.NS", "Reliance Industries"),
+                ("TCS.NS", "TCS"),
+                ("HDFCBANK.NS", "HDFC Bank"),
+                ("INFY.NS", "Infosys")
+            ]
+            
+            for symbol, name in blue_chips:
+                try:
+                    ticker = yf.Ticker(symbol)
+                    hist = ticker.history(period="3mo", interval="1d")
+                    
+                    if not hist.empty:
+                        cmp = hist['Close'].iloc[-1]
+                        avg_20 = hist['Close'].tail(20).mean()
+                        
+                        # If price > 20-day MA, consider bullish
+                        if cmp > avg_20:
+                            target = cmp * 1.10
+                            stop_loss = cmp * 0.93
+                            upside = 10.0
+                            
+                            longterm_picks.append({
+                                "Stock": name,
+                                "Symbol": symbol,
+                                "CMP": round(cmp, 2),
+                                "Target": round(target, 0),
+                                "Stop Loss": round(stop_loss, 2),
+                                "Upside %": upside,
+                                "Type": "Technical",
+                                "Timeframe": "4-6 weeks",
+                                "Date": datetime.now().strftime('%Y-%m-%d'),
+                                "Source": "Technical Analysis"
+                            })
+                except:
+                    continue
+        except Exception as e:
+            print(f"Technical analysis error: {e}")
+    
+    if longterm_picks:
+        df = pd.DataFrame(longterm_picks)
+        # Sort by upside percentage
+        df = df.sort_values('Upside %', ascending=False)
+        # Remove duplicates
+        df = df.drop_duplicates(subset=['Stock'], keep='first')
+        return df.head(8)
+    
+    # Last resort fallback
+    return pd.DataFrame([{
+        "Stock": "Loading...",
+        "Symbol": "-",
+        "CMP": 0,
+        "Target": 0,
+        "Stop Loss": 0,
+        "Upside %": 0,
+        "Type": "Refreshing",
+        "Timeframe": "Loading",
+        "Date": datetime.now().strftime('%Y-%m-%d'),
+        "Source": "System"
+    }])
                                     continue
     except Exception as e:
         print(f"Moneycontrol error: {e}")
@@ -379,6 +481,142 @@ def get_longterm_recommendations():
         return df.head(8)
     
     return pd.DataFrame()
+
+def search_stock_recommendations(ticker_symbol):
+    """
+    Search for stock recommendations by ticker symbol
+    Returns both intraday and long-term analyst recommendations
+    """
+    result = {
+        'symbol': ticker_symbol,
+        'name': '',
+        'cmp': 0,
+        'intraday': None,
+        'longterm': None,
+        'error': None
+    }
+    
+    # Ensure .NS suffix
+    if not ticker_symbol.endswith('.NS'):
+        ticker_symbol = f"{ticker_symbol}.NS"
+    
+    try:
+        ticker = yf.Ticker(ticker_symbol)
+        info = ticker.info
+        
+        # Get basic info
+        result['name'] = info.get('shortName', ticker_symbol.replace('.NS', ''))
+        result['cmp'] = ticker.fast_info.get('lastPrice', 0)
+        
+        if result['cmp'] == 0:
+            result['error'] = "Stock not found or invalid ticker"
+            return result
+        
+        # === INTRADAY RECOMMENDATIONS ===
+        try:
+            hist = ticker.history(period="5d", interval="5m")
+            
+            if not hist.empty and len(hist) > 20:
+                open_price = hist['Open'].iloc[0]
+                current_price = hist['Close'].iloc[-1]
+                high_today = hist['High'].max()
+                low_today = hist['Low'].min()
+                
+                # Calculate intraday momentum
+                change_pct = ((current_price - open_price) / open_price) * 100
+                
+                # Calculate support and resistance
+                recent_20 = hist.tail(20)
+                avg_price = recent_20['Close'].mean()
+                
+                # Determine intraday targets
+                if change_pct > 0.3:  # Bullish momentum
+                    target = current_price * 1.02
+                    stop_loss = current_price * 0.985
+                    recommendation = "BUY"
+                    signal = "Strong Upward Momentum"
+                elif change_pct < -0.3:  # Bearish, potential reversal
+                    target = current_price * 1.015
+                    stop_loss = current_price * 0.99
+                    recommendation = "REVERSAL PLAY"
+                    signal = "Oversold - Potential Bounce"
+                else:  # Neutral
+                    target = current_price * 1.01
+                    stop_loss = current_price * 0.99
+                    recommendation = "NEUTRAL"
+                    signal = "No Clear Direction"
+                
+                upside = ((target - current_price) / current_price) * 100
+                
+                result['intraday'] = {
+                    'available': True,
+                    'recommendation': recommendation,
+                    'signal': signal,
+                    'cmp': round(current_price, 2),
+                    'target': round(target, 2),
+                    'stop_loss': round(stop_loss, 2),
+                    'upside_pct': round(upside, 2),
+                    'day_high': round(high_today, 2),
+                    'day_low': round(low_today, 2),
+                    'momentum_pct': round(change_pct, 2)
+                }
+        except Exception as e:
+            result['intraday'] = {
+                'available': False,
+                'message': 'Intraday data not available'
+            }
+        
+        # === LONG-TERM ANALYST RECOMMENDATIONS ===
+        try:
+            # Get analyst recommendations
+            target_mean = info.get('targetMeanPrice', 0)
+            target_high = info.get('targetHighPrice', 0)
+            target_low = info.get('targetLowPrice', 0)
+            recommendation_key = info.get('recommendationKey', 'none')
+            number_of_analysts = info.get('numberOfAnalystOpinions', 0)
+            
+            if target_mean and target_mean > 0:
+                avg_upside = ((target_mean - result['cmp']) / result['cmp']) * 100
+                max_upside = ((target_high - result['cmp']) / result['cmp']) * 100 if target_high else 0
+                min_upside = ((target_low - result['cmp']) / result['cmp']) * 100 if target_low else 0
+                
+                # Determine recommendation sentiment
+                if recommendation_key in ['strong_buy', 'buy']:
+                    sentiment = "BUY"
+                elif recommendation_key in ['strong_sell', 'sell']:
+                    sentiment = "SELL"
+                else:
+                    sentiment = "HOLD"
+                
+                result['longterm'] = {
+                    'available': True,
+                    'recommendation': sentiment,
+                    'cmp': round(result['cmp'], 2),
+                    'avg_target': round(target_mean, 2),
+                    'max_target': round(target_high, 2) if target_high else None,
+                    'min_target': round(target_low, 2) if target_low else None,
+                    'avg_upside_pct': round(avg_upside, 2),
+                    'max_upside_pct': round(max_upside, 2) if target_high else None,
+                    'min_upside_pct': round(min_upside, 2) if target_low else None,
+                    'num_analysts': number_of_analysts,
+                    'timeframe': '3-12 months'
+                }
+            else:
+                result['longterm'] = {
+                    'available': False,
+                    'message': 'No analyst coverage available for this stock'
+                }
+        except Exception as e:
+            result['longterm'] = {
+                'available': False,
+                'message': 'Long-term recommendations not available'
+            }
+        
+        return result
+        
+    except Exception as e:
+        result['error'] = f"Error fetching data: {str(e)}"
+        return result
 
 def get_nse_symbol(stock_name):
     """Convert stock name to NSE symbol"""
