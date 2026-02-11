@@ -2,19 +2,16 @@ import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 import yfinance as yf
-from streamlit_autorefresh import st_autorefresh
 from data_sources import (
     fetch_comex, 
     fetch_mcx_intraday,
-    get_intraday_recommendations,
-    get_longterm_recommendations,
     get_live_market_news
 )
 from datetime import datetime
+import pandas as pd
 
 # Page configuration
 st.set_page_config(page_title="Commodity & Stock Dashboard", layout="wide", page_icon="📊")
-st_autorefresh(interval=30000, key="refresh")  # 30 seconds for live sync
 
 # Custom CSS for Montserrat font
 st.markdown("""
@@ -54,7 +51,15 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("📊 Multi-Asset Market Dashboard")
+# Header with manual refresh button for charts only
+col1, col2 = st.columns([4, 1])
+with col1:
+    st.title("📊 Multi-Asset Market Dashboard")
+with col2:
+    if st.button("🔄 Refresh Charts", use_container_width=True):
+        st.rerun()
+
+st.caption("💡 Commodity charts update on manual refresh. Stock search and news stay persistent.")
 
 # =========================
 # 🌍 SECTION 1: COMEX
@@ -429,28 +434,30 @@ st.divider()
 # 🚀 SECTION 3: STOCK SEARCH & RECOMMENDATIONS
 # =========================
 st.subheader("🔍 Search Stock Recommendations")
-st.caption("Search any NSE stock ticker to get intraday and long-term analyst targets")
+st.caption("Search any NSE stock by ticker or name to get intraday and long-term analyst targets")
 
-# Search input
-search_col1, search_col2 = st.columns([3, 1])
+# Import search function
+from data_sources import search_stock_recommendations, get_nse_stock_list
 
-with search_col1:
-    ticker_input = st.text_input(
-        "Enter NSE Stock Ticker",
-        placeholder="e.g., RELIANCE, TCS, INFY, HDFCBANK",
-        help="Enter the stock symbol (e.g., RELIANCE for Reliance Industries)",
-        label_visibility="collapsed"
-    )
+# Get stock list for autocomplete
+stock_options = get_nse_stock_list()
 
-with search_col2:
-    search_button = st.button("🔍 Search", use_container_width=True, type="primary")
+# Search with autocomplete
+selected_stock = st.selectbox(
+    "Search by Stock Ticker or Name",
+    options=[""] + stock_options,
+    index=0,
+    placeholder="Type to search (e.g., RELIANCE or Reliance Industries)",
+    help="Start typing the stock ticker (e.g., RELIANCE) or company name (e.g., Reliance Industries)"
+)
 
-# Display results when search is triggered
-if search_button and ticker_input:
-    with st.spinner(f"Searching for {ticker_input.upper()}..."):
-        from data_sources import search_stock_recommendations
-        
-        result = search_stock_recommendations(ticker_input.upper())
+# Display results when a stock is selected
+if selected_stock:
+    # Extract ticker from selection (format: "TICKER - Company Name")
+    ticker_input = selected_stock.split(" - ")[0].strip()
+    
+    with st.spinner(f"Searching for {ticker_input}..."):
+        result = search_stock_recommendations(ticker_input)
         
         if result['error']:
             st.error(f"❌ {result['error']}")
@@ -522,29 +529,8 @@ if search_button and ticker_input:
                             st.caption(f"Upside: {longterm['max_upside_pct']:+.2f}%")
                 else:
                     st.info("ℹ️ " + result['longterm'].get('message', 'Not available'))
-
-elif ticker_input and not search_button:
-    st.info("👆 Click Search button to get recommendations")
 else:
-    # Show popular stocks as examples
-    st.markdown("#### 💡 Popular Stocks")
-    st.caption("Try searching: RELIANCE, TCS, INFY, HDFCBANK, ICICIBANK, SBIN, BHARTIARTL, ITC, WIPRO, LT")
-    
-    # Quick search buttons
-    st.markdown("**Quick Search:**")
-    quick_cols = st.columns(5)
-    popular = ["RELIANCE", "TCS", "INFY", "HDFCBANK", "SBIN"]
-    
-    for idx, stock in enumerate(popular):
-        with quick_cols[idx]:
-            if st.button(stock, key=f"quick_{stock}", use_container_width=True):
-                st.session_state['search_ticker'] = stock
-                st.rerun()
-
-# Handle quick search
-if 'search_ticker' in st.session_state:
-    ticker_input = st.session_state['search_ticker']
-    del st.session_state['search_ticker']
+    st.info("💡 Select a stock from the dropdown above to see recommendations")
 
 st.divider()
 
@@ -607,9 +593,9 @@ st.divider()
 # Footer
 col1, col2 = st.columns(2)
 with col1:
-    st.caption(f"🔴 Live • Last updated: {datetime.now().strftime('%d %b %Y, %H:%M:%S')} • Syncing every 30s")
+    st.caption(f"📊 Last chart refresh: {datetime.now().strftime('%d %b %Y, %H:%M:%S')}")
 with col2:
-    st.caption("📊 Data from Yahoo Finance, MCX India, Economic Times & Moneycontrol")
+    st.caption("📈 Data from Yahoo Finance, MCX India, Economic Times & Moneycontrol")
 
 st.markdown("---")
 st.markdown(
