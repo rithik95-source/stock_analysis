@@ -15,10 +15,10 @@ import pandas as pd
 st.set_page_config(page_title="Market Charts", layout="wide", page_icon="📊")
 
 # =========================
-# 🔄 AUTO REFRESH (Every 15 seconds)
+# 🔄 AUTO REFRESH (Every 60 seconds)
 # =========================
 st_autorefresh(
-    interval= 15 * 1000,  # 15 seconds
+    interval=15 * 1000,  # 15 seconds
     key="market_autorefresh"
 )
 
@@ -62,7 +62,7 @@ st.markdown("""
 
 # Header
 st.title("📊 Commodity Market Charts")
-st.caption("💡 Live commodity price charts • Auto refresh every 15 seconds")
+st.caption("💡 Live commodity price charts • Auto refresh every 60 seconds")
 st.divider()
 
 # =========================
@@ -207,52 +207,68 @@ for i in range(0, len(commodities), 2):
             except Exception as e:
                 st.error(f"Error loading {name} data: {str(e)}")
 
+# =========================
+# 🇮🇳 SECTION 2: MCX
+# =========================
 st.divider()
+st.subheader("🇮🇳 MCX Futures (Domestic - Approx. INR)")
+st.caption("💡 Live prices converted from international markets to INR")
+
+mcx_commodities = [("Gold", "GOLD"), ("Silver", "SILVER"), ("Crude Oil", "CRUDEOIL"), ("Copper", "COPPER")]
+
+def convert_to_inr(df, commodity):
+    df = df.copy()
+    if commodity == "GOLD":
+        multiplier = (10 / 31.1035) * 83
+    elif commodity == "SILVER":
+        multiplier = 32.15 * 83
+    elif commodity == "CRUDEOIL":
+        multiplier = 83
+    elif commodity == "COPPER":
+        multiplier = 2.205 * 83
+    else:
+        multiplier = 83
+
+    for col in ['Close', 'High', 'Low', 'Open']:
+        df[col] = df[col] * multiplier
+
+    return df
+
+mcx_to_yahoo = {
+    "GOLD": "GC=F",
+    "SILVER": "SI=F",
+    "CRUDEOIL": "CL=F",
+    "COPPER": "HG=F"
+}
+
+for name, symbol in mcx_commodities:
+    yahoo_symbol = mcx_to_yahoo[symbol]
+    df = yf.Ticker(yahoo_symbol).history(period="1d", interval="5m").reset_index()
+
+    if not df.empty:
+        df = convert_to_inr(df, symbol)
+        last_price = df['Close'].iloc[-1]
+        st.metric(f"MCX {name}", f"₹{last_price:,.0f}")
 
 # =========================
-# 📰 SECTION 3: MARKET NEWS
+# 📰 SECTION 3: NEWS
 # =========================
+st.divider()
 st.subheader("📰 Market News & Headlines")
-st.caption("Latest updates from Economic Times, Moneycontrol, and more")
 
 try:
     news_items = get_live_market_news()
-
-    reco_news = [item for item in news_items if item.get('category') == 'recommendation']
-    market_news = [item for item in news_items if item.get('category') != 'recommendation']
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.markdown("#### 💼 Stock Recommendations")
-        for item in reco_news[:6]:
-            with st.expander(f"📌 {item['title'][:80]}..."):
-                st.markdown(f"**Source:** {item['publisher']}")
-                pub_time = datetime.fromtimestamp(item['provider_publish_time'])
-                st.caption(f"Published: {pub_time.strftime('%d %b, %H:%M')}")
-                if item.get('link') and item['link'] != '#':
-                    st.markdown(f"[Read Full Article]({item['link']})")
-
-    with col2:
-        st.markdown("#### 📊 General Headlines")
-        for item in market_news[:6]:
-            with st.expander(f"📰 {item['title'][:80]}..."):
-                st.markdown(f"**Source:** {item['publisher']}")
-                pub_time = datetime.fromtimestamp(item['provider_publish_time'])
-                st.caption(f"Published: {pub_time.strftime('%d %b, %H:%M')}")
-                if item.get('link') and item['link'] != '#':
-                    st.markdown(f"[Read Full Article]({item['link']})")
-
-except Exception:
-    st.warning("Unable to load news at this time. Please try again later.")
+    for item in news_items[:8]:
+        with st.expander(item['title']):
+            st.write(item['publisher'])
+            if item.get('link'):
+                st.markdown(f"[Read more]({item['link']})")
+except:
+    st.warning("Unable to load news.")
 
 st.divider()
+st.caption(f"📊 Last refresh: {datetime.now().strftime('%d %b %Y, %H:%M:%S')}")
 
-col1, col2 = st.columns(2)
-with col1:
-    st.caption(f"📊 Last chart refresh: {datetime.now().strftime('%d %b %Y, %H:%M:%S')}")
-with col2:
-    st.caption("📈 Data from Yahoo Finance, MCX India, Economic Times & Moneycontrol")
 
 
 
