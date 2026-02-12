@@ -62,7 +62,7 @@ st.markdown("""
 
 # Header
 st.title("📊 Commodity Market Charts")
-st.caption("💡 Live commodity price charts • Auto refresh every 60 seconds")
+st.caption("💡 Live commodity price charts • Auto refresh every 15 seconds")
 st.divider()
 
 # =========================
@@ -253,6 +253,7 @@ with col1:
     st.caption(f"📊 Last chart refresh: {datetime.now().strftime('%d %b %Y, %H:%M:%S')}")
 with col2:
     st.caption("📈 Data from Yahoo Finance, MCX India, Economic Times & Moneycontrol")
+
 
 
 
