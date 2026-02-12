@@ -24,7 +24,7 @@ st.title("🔍 Stock Recommendations")
 st.caption("Search any NSE stock to get intraday and long-term analyst targets")
 st.divider()
 
-# Get complete NSE stock list (300+ stocks)
+# Get complete NSE stock list (500+ stocks)
 stock_options = get_all_nse_stocks()
 
 # Search with autocomplete
@@ -33,7 +33,7 @@ selected_stock = st.selectbox(
     options=[""] + stock_options,
     index=0,
     placeholder="Type to search (e.g., RELIANCE or Reliance Industries Ltd.)",
-    help="Start typing the stock ticker or company name - we have 300+ NSE stocks"
+    help="Start typing the stock ticker or company name - we have 500+ NSE stocks"
 )
 
 # Display results when a stock is selected
@@ -130,7 +130,7 @@ else:
         **Search Options:**
         - Search by ticker (e.g., `RELIANCE`)
         - Search by company name (e.g., `Reliance Industries`)
-        - We have **300+ NSE stocks** available
+        - We have **500+ NSE stocks** available
         
         **Intraday Analysis:**
         - Momentum-based signals
@@ -149,6 +149,7 @@ else:
         **Popular Searches:**
         - RELIANCE, TCS, INFY, HDFCBANK
         - ICICIBANK, SBIN, BHARTIARTL, ITC
+        - TATACONSUM, ADANIPORTS, ZOMATO
         """)
 
 st.divider()
