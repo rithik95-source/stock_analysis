@@ -15,10 +15,10 @@ import pandas as pd
 st.set_page_config(page_title="Market Charts", layout="wide", page_icon="📊")
 
 # =========================
-# 🔄 AUTO REFRESH (Every 60 seconds)
+# 🔄 AUTO REFRESH (Every 15 seconds)
 # =========================
 st_autorefresh(
-    interval=60 * 1000,  # 60 seconds
+    interval= 15 * 1000,  # 15 seconds
     key="market_autorefresh"
 )
 
@@ -253,6 +253,7 @@ with col1:
     st.caption(f"📊 Last chart refresh: {datetime.now().strftime('%d %b %Y, %H:%M:%S')}")
 with col2:
     st.caption("📈 Data from Yahoo Finance, MCX India, Economic Times & Moneycontrol")
+
 
 
 
