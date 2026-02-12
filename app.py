@@ -11,7 +11,7 @@ from datetime import datetime
 import pandas as pd
 
 # Page configuration
-st.set_page_config(page_title="Commodity & Stock Dashboard", layout="wide", page_icon="📊")
+st.set_page_config(page_title="Market Charts", layout="wide", page_icon="📊")
 
 # Custom CSS for Montserrat font
 st.markdown("""
@@ -51,15 +51,16 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Header with manual refresh button for charts only
+# Header with manual refresh button
 col1, col2 = st.columns([4, 1])
 with col1:
-    st.title("📊 Multi-Asset Market Dashboard")
+    st.title("📊 Commodity Market Charts")
 with col2:
-    if st.button("🔄 Refresh Charts", use_container_width=True):
+    if st.button("🔄 Refresh", use_container_width=True):
         st.rerun()
 
-st.caption("💡 Commodity charts update on manual refresh. Stock search and news stay persistent.")
+st.caption("💡 Live commodity price charts • Click refresh to update")
+st.divider()
 
 # =========================
 # 🌍 SECTION 1: COMEX
@@ -431,162 +432,42 @@ for i in range(0, len(mcx_commodities), 2):
 st.divider()
 
 # =========================
-# 🚀 SECTION 3: STOCK SEARCH & RECOMMENDATIONS
+# 📰 SECTION 3: MARKET NEWS
 # =========================
-st.subheader("🔍 Search Stock Recommendations")
-st.caption("Search any NSE stock by ticker or name to get intraday and long-term analyst targets")
+st.subheader("📰 Market News & Headlines")
+st.caption("Latest updates from Economic Times, Moneycontrol, and more")
 
-# Import search function
-from data_sources import search_stock_recommendations, get_nse_stock_list
-
-# Get stock list for autocomplete
-stock_options = get_nse_stock_list()
-
-# Search with autocomplete
-selected_stock = st.selectbox(
-    "Search by Stock Ticker or Name",
-    options=[""] + stock_options,
-    index=0,
-    placeholder="Type to search (e.g., RELIANCE or Reliance Industries)",
-    help="Start typing the stock ticker (e.g., RELIANCE) or company name (e.g., Reliance Industries)"
-)
-
-# Display results when a stock is selected
-if selected_stock:
-    # Extract ticker from selection (format: "TICKER - Company Name")
-    ticker_input = selected_stock.split(" - ")[0].strip()
-    
-    with st.spinner(f"Searching for {ticker_input}..."):
-        result = search_stock_recommendations(ticker_input)
-        
-        if result['error']:
-            st.error(f"❌ {result['error']}")
-        else:
-            # Stock Header
-            st.markdown(f"### {result['name']} ({result['symbol']})")
-            st.metric("Current Market Price", f"₹{result['cmp']:,.2f}")
-            
-            st.divider()
-            
-            # Create two columns for Intraday and Long-term
-            intra_col, long_col = st.columns(2)
-            
-            # INTRADAY RECOMMENDATIONS
-            with intra_col:
-                st.markdown("#### ⚡ Intraday Analysis")
-                
-                if result['intraday'] and result['intraday'].get('available'):
-                    intra = result['intraday']
-                    
-                    # Recommendation badge
-                    rec_color = "🟢" if intra['recommendation'] == "BUY" else "🟡" if intra['recommendation'] == "NEUTRAL" else "🔵"
-                    st.markdown(f"{rec_color} **{intra['recommendation']}**")
-                    st.caption(intra['signal'])
-                    
-                    # Metrics
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.metric("Target", f"₹{intra['target']:,.2f}", f"{intra['upside_pct']:+.2f}%")
-                    with col2:
-                        st.metric("Stop Loss", f"₹{intra['stop_loss']:,.2f}")
-                    
-                    # Range
-                    st.markdown("**Today's Range**")
-                    st.caption(f"High: ₹{intra['day_high']:,.2f} | Low: ₹{intra['day_low']:,.2f}")
-                    st.caption(f"Momentum: {intra['momentum_pct']:+.2f}%")
-                    
-                else:
-                    st.info("ℹ️ " + result['intraday'].get('message', 'Not available'))
-            
-            # LONG-TERM RECOMMENDATIONS
-            with long_col:
-                st.markdown("#### 📈 Long-term Targets")
-                
-                if result['longterm'] and result['longterm'].get('available'):
-                    longterm = result['longterm']
-                    
-                    # Recommendation badge
-                    rec_color = "🟢" if longterm['recommendation'] == "BUY" else "🔴" if longterm['recommendation'] == "SELL" else "🟡"
-                    st.markdown(f"{rec_color} **{longterm['recommendation']}**")
-                    st.caption(f"Based on {longterm['num_analysts']} analyst(s) | {longterm['timeframe']}")
-                    
-                    # Average Target
-                    st.metric(
-                        "Average Target", 
-                        f"₹{longterm['avg_target']:,.2f}",
-                        f"{longterm['avg_upside_pct']:+.2f}%"
-                    )
-                    
-                    # Min/Max Targets
-                    if longterm['min_target'] and longterm['max_target']:
-                        st.markdown("**Analyst Target Range**")
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            st.caption(f"**Min:** ₹{longterm['min_target']:,.2f}")
-                            st.caption(f"Upside: {longterm['min_upside_pct']:+.2f}%")
-                        with col2:
-                            st.caption(f"**Max:** ₹{longterm['max_target']:,.2f}")
-                            st.caption(f"Upside: {longterm['max_upside_pct']:+.2f}%")
-                else:
-                    st.info("ℹ️ " + result['longterm'].get('message', 'Not available'))
-else:
-    st.info("💡 Select a stock from the dropdown above to see recommendations")
-
-st.divider()
-
-# =========================
-# 📰 SECTION 4: MARKET NEWS
-# =========================
-st.subheader("📰 Live Market News & Updates")
-
-news_col1, news_col2 = st.columns(2)
-
-with news_col1:
-    st.markdown("#### 💡 Stock Recommendation News")
+try:
     news_items = get_live_market_news()
     
-    # Filter recommendation news
-    reco_news = [n for n in news_items if n.get('category') == 'recommendation']
+    # Separate recommendation news and general news
+    reco_news = [item for item in news_items if item.get('category') == 'recommendation']
+    market_news = [item for item in news_items if item.get('category') != 'recommendation']
     
-    if reco_news:
+    # Create two columns
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("#### 💼 Stock Recommendations")
         for item in reco_news[:6]:
-            if isinstance(item, dict) and 'title' in item:
-                title = item.get('title', 'No title')
-                with st.expander(f"📌 {title[:65]}..."):
-                    st.write(f"**Source:** {item.get('publisher', 'Unknown')}")
-                    if 'provider_publish_time' in item:
-                        try:
-                            pub_time = datetime.fromtimestamp(item['provider_publish_time'])
-                            st.write(f"**Published:** {pub_time.strftime('%d %b, %H:%M')}")
-                        except:
-                            st.write(f"**Published:** Recent")
-                    if 'link' in item and item['link'] != '#':
-                        st.link_button("📰 Read Full Article", item['link'])
-    else:
-        st.info("📡 Loading recommendation news...")
-
-with news_col2:
-    st.markdown("#### 📈 General Market Headlines")
+            with st.expander(f"📌 {item['title'][:80]}..."):
+                st.markdown(f"**Source:** {item['publisher']}")
+                pub_time = datetime.fromtimestamp(item['provider_publish_time'])
+                st.caption(f"Published: {pub_time.strftime('%d %b, %H:%M')}")
+                if item.get('link') and item['link'] != '#':
+                    st.markdown(f"[Read Full Article]({item['link']})")
     
-    # Filter market news
-    market_news = [n for n in news_items if n.get('category') == 'market']
-    
-    if market_news:
+    with col2:
+        st.markdown("#### 📊 General Headlines")
         for item in market_news[:6]:
-            if isinstance(item, dict) and 'title' in item:
-                title = item.get('title', 'No title')
-                with st.expander(f"📰 {title[:65]}..."):
-                    st.write(f"**Source:** {item.get('publisher', 'Finance News')}")
-                    if 'provider_publish_time' in item:
-                        try:
-                            pub_time = datetime.fromtimestamp(item['provider_publish_time'])
-                            st.write(f"**Published:** {pub_time.strftime('%d %b, %H:%M')}")
-                        except:
-                            st.write(f"**Published:** Recent")
-                    if 'link' in item and item['link'] != '#':
-                        st.link_button("📰 Read Full Article", item['link'])
-    else:
-        st.info("📡 Loading market headlines...")
+            with st.expander(f"📰 {item['title'][:80]}..."):
+                st.markdown(f"**Source:** {item['publisher']}")
+                pub_time = datetime.fromtimestamp(item['provider_publish_time'])
+                st.caption(f"Published: {pub_time.strftime('%d %b, %H:%M')}")
+                if item.get('link') and item['link'] != '#':
+                    st.markdown(f"[Read Full Article]({item['link']})")
+except Exception as e:
+    st.warning("Unable to load news at this time. Please try again later.")
 
 st.divider()
 
@@ -596,14 +477,3 @@ with col1:
     st.caption(f"📊 Last chart refresh: {datetime.now().strftime('%d %b %Y, %H:%M:%S')}")
 with col2:
     st.caption("📈 Data from Yahoo Finance, MCX India, Economic Times & Moneycontrol")
-
-st.markdown("---")
-st.markdown(
-    """
-    <div style='text-align: center; color: #888; font-size: 12px;'>
-        ⚠️ <b>Disclaimer:</b> This dashboard is for informational purposes only. Not financial advice. 
-        Always do your own research and consult a financial advisor before making investment decisions.
-    </div>
-    """,
-    unsafe_allow_html=True
-)
