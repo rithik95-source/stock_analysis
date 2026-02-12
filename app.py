@@ -2,6 +2,7 @@ import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 import yfinance as yf
+from streamlit_autorefresh import st_autorefresh
 from data_sources import (
     fetch_comex, 
     fetch_mcx_intraday,
@@ -12,6 +13,10 @@ import pandas as pd
 
 # Page configuration
 st.set_page_config(page_title="Market Charts", layout="wide", page_icon="📊")
+
+# Auto-refresh every 30 seconds (30000 milliseconds)
+# Returns the number of times the app has refreshed
+count = st_autorefresh(interval=30000, limit=None, key="data_refresh")
 
 # Custom CSS for Montserrat font
 st.markdown("""
@@ -59,7 +64,7 @@ with col2:
     if st.button("🔄 Refresh", use_container_width=True):
         st.rerun()
 
-st.caption("💡 Live commodity price charts • Click refresh to update")
+st.caption("💡 Live commodity price charts • Auto-refreshes every 30 seconds")
 st.divider()
 
 # =========================
@@ -228,39 +233,17 @@ st.divider()
 # =========================
 # 🇮🇳 SECTION 2: MCX
 # =========================
-st.subheader("🇮🇳 MCX Futures (Domestic - Approx. INR)")
-st.caption("💡 Live prices converted from international markets to INR")
+st.subheader("🇮🇳 MCX India (Converted to INR)")
 
-mcx_commodities = [("Gold", "GOLD"), ("Silver", "SILVER"), ("Crude Oil", "CRUDEOIL"), ("Copper", "COPPER")]
+# MCX commodities with Yahoo Finance mapping
+mcx_commodities = [
+    ("Gold", "GOLD"),
+    ("Silver", "SILVER"),
+    ("Crude Oil", "CRUDEOIL"),
+    ("Copper", "COPPER")
+]
 
-# Conversion functions
-def convert_to_inr(df, commodity):
-    """Convert international prices to MCX INR equivalent"""
-    df = df.copy()
-    
-    if commodity == "GOLD":
-        # USD/oz to INR/10g
-        multiplier = (10 / 31.1035) * 83
-    elif commodity == "SILVER":
-        # USD/oz to INR/kg
-        multiplier = 32.15 * 83
-    elif commodity == "CRUDEOIL":
-        # USD/barrel to INR/barrel
-        multiplier = 83
-    elif commodity == "COPPER":
-        # USD/lb to INR/kg
-        multiplier = 2.205 * 83
-    else:
-        multiplier = 83
-    
-    df['Close'] = df['Close'] * multiplier
-    df['High'] = df['High'] * multiplier
-    df['Low'] = df['Low'] * multiplier
-    df['Open'] = df['Open'] * multiplier
-    
-    return df
-
-# MCX symbol mapping
+# Mapping to Yahoo Finance symbols
 mcx_to_yahoo = {
     "GOLD": "GC=F",
     "SILVER": "SI=F",
@@ -268,11 +251,40 @@ mcx_to_yahoo = {
     "COPPER": "HG=F"
 }
 
+# Conversion function for MCX
+def convert_to_inr(df, commodity):
+    """Convert international prices to INR"""
+    if commodity == "GOLD":
+        # USD/oz to INR/10g
+        df['Close'] = df['Close'] * (10 / 31.1035) * 83
+        df['High'] = df['High'] * (10 / 31.1035) * 83
+        df['Low'] = df['Low'] * (10 / 31.1035) * 83
+        df['Open'] = df['Open'] * (10 / 31.1035) * 83
+    elif commodity == "SILVER":
+        # USD/oz to INR/kg
+        df['Close'] = df['Close'] * 32.15 * 83
+        df['High'] = df['High'] * 32.15 * 83
+        df['Low'] = df['Low'] * 32.15 * 83
+        df['Open'] = df['Open'] * 32.15 * 83
+    elif commodity == "CRUDEOIL":
+        # USD/barrel to INR/barrel
+        df['Close'] = df['Close'] * 83
+        df['High'] = df['High'] * 83
+        df['Low'] = df['Low'] * 83
+        df['Open'] = df['Open'] * 83
+    elif commodity == "COPPER":
+        # USD/lb to INR/kg
+        df['Close'] = df['Close'] * 2.205 * 83
+        df['High'] = df['High'] * 2.205 * 83
+        df['Low'] = df['Low'] * 2.205 * 83
+        df['Open'] = df['Open'] * 2.205 * 83
+    return df
+
 for i in range(0, len(mcx_commodities), 2):
     cols = st.columns(2)
     for col, (name, symbol) in zip(cols, mcx_commodities[i:i+2]):
         with col:
-            # Time period selector - Mobile friendly dropdown
+            # Time period selector
             period_options = {
                 "1D": ("1d", "5m"),
                 "1W": ("5d", "15m"),
@@ -285,11 +297,10 @@ for i in range(0, len(mcx_commodities), 2):
                 "Max": ("max", "1mo")
             }
             
-            # Use session state to track selected period per commodity
+            # Use session state
             if f'mcx_period_{symbol}' not in st.session_state:
                 st.session_state[f'mcx_period_{symbol}'] = "1D"
             
-            # Dropdown selector instead of buttons
             selected_period = st.selectbox(
                 "Time Range",
                 options=list(period_options.keys()),
@@ -474,6 +485,6 @@ st.divider()
 # Footer
 col1, col2 = st.columns(2)
 with col1:
-    st.caption(f"📊 Last chart refresh: {datetime.now().strftime('%d %b %Y, %H:%M:%S')}")
+    st.caption(f"📊 Last refresh: {datetime.now().strftime('%d %b %Y, %H:%M:%S')} • Refresh #{count}")
 with col2:
     st.caption("📈 Data from Yahoo Finance, MCX India, Economic Times & Moneycontrol")
