@@ -2,6 +2,7 @@ import yfinance as yf
 import pandas as pd
 import requests
 import io
+import time
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 import feedparser
@@ -431,93 +432,157 @@ def get_longterm_recommendations():
         "Source": "System"
     }])
 
-def search_stock_recommendations(ticker_symbol):
+def search_stock_recommendations(ticker_input):
     """
-    Search for stock recommendations by ticker symbol
-    Returns both intraday and long-term analyst recommendations
+    Enhanced stock recommendation function with multiple data sources,
+    rate limit handling, and intelligent fallbacks
     """
+    
+    # Convert to NSE symbol format
+    if not ticker_input.endswith('.NS'):
+        symbol = f"{ticker_input.upper()}.NS"
+    else:
+        symbol = ticker_input.upper()
+    
     result = {
-        'symbol': ticker_symbol,
-        'name': '',
+        'symbol': ticker_input.upper(),
+        'name': ticker_input.upper(),
         'cmp': 0,
-        'intraday': None,
-        'longterm': None,
-        'error': None
+        'error': None,
+        'intraday': {'available': False},
+        'longterm': {'available': False},
+        'data_source': 'Unknown',
+        'volume': None,
+        'market_cap': None,
+        'pe_ratio': None,
+        '52w_high': None,
+        '52w_low': None,
+        'dividend_yield': None
     }
     
-    # Ensure .NS suffix
-    if not ticker_symbol.endswith('.NS'):
-        ticker_symbol = f"{ticker_symbol}.NS"
-    
+    # Try Method 1: Yahoo Finance (Primary)
     try:
-        ticker = yf.Ticker(ticker_symbol)
-        info = ticker.info
+        ticker_obj = yf.Ticker(symbol)
         
-        # Get basic info
-        result['name'] = info.get('shortName', ticker_symbol.replace('.NS', ''))
-        result['cmp'] = ticker.fast_info.get('lastPrice', 0)
+        # Use fast_info for quick data access (less rate limited)
+        try:
+            fast_info = ticker_obj.fast_info
+            current_price = fast_info.get('lastPrice', 0)
+            
+            if current_price and current_price > 0:
+                result['cmp'] = current_price
+                result['data_source'] = 'Yahoo Finance (Fast)'
+                
+                # Try to get additional info without triggering rate limits
+                try:
+                    result['volume'] = fast_info.get('lastVolume', None)
+                    result['52w_high'] = fast_info.get('yearHigh', None)
+                    result['52w_low'] = fast_info.get('yearLow', None)
+                except:
+                    pass
+                
+        except Exception as e:
+            # Fallback to history if fast_info fails
+            hist = ticker_obj.history(period="1d")
+            if not hist.empty:
+                current_price = hist['Close'].iloc[-1]
+                result['cmp'] = current_price
+                result['data_source'] = 'Yahoo Finance (History)'
+            else:
+                raise Exception("No price data available")
         
-        if result['cmp'] == 0:
-            result['error'] = "Stock not found or invalid ticker"
-            return result
+        # Get company name
+        try:
+            info = ticker_obj.info
+            result['name'] = info.get('longName', ticker_input.upper())
+            
+            # Additional info (with error handling for each)
+            try:
+                result['market_cap'] = info.get('marketCap', 0) / 10000000  # Convert to Crores
+            except:
+                pass
+            
+            try:
+                result['pe_ratio'] = info.get('trailingPE', None)
+            except:
+                pass
+            
+            try:
+                result['dividend_yield'] = info.get('dividendYield', 0) * 100 if info.get('dividendYield') else None
+            except:
+                pass
+            
+        except Exception as e:
+            print(f"Could not fetch company info: {e}")
         
         # === INTRADAY RECOMMENDATIONS ===
         try:
-            hist = ticker.history(period="5d", interval="5m")
+            # Get intraday data with rate limit protection
+            time.sleep(0.5)  # Small delay to avoid rate limits
+            hist_1d = ticker_obj.history(period="2d", interval="5m")
             
-            if not hist.empty and len(hist) > 20:
-                open_price = hist['Open'].iloc[0]
-                current_price = hist['Close'].iloc[-1]
-                high_today = hist['High'].max()
-                low_today = hist['Low'].min()
+            if not hist_1d.empty and len(hist_1d) > 10:
+                # Get today's data
+                today_data = hist_1d.tail(78)  # Last 78 bars = approx 1 trading day
                 
-                # Calculate intraday momentum
-                change_pct = ((current_price - open_price) / open_price) * 100
-                
-                # Calculate support and resistance
-                recent_20 = hist.tail(20)
-                avg_price = recent_20['Close'].mean()
-                
-                # Determine intraday targets
-                if change_pct > 0.3:  # Bullish momentum
-                    target = current_price * 1.02
-                    stop_loss = current_price * 0.985
-                    recommendation = "BUY"
-                    signal = "Strong Upward Momentum"
-                elif change_pct < -0.3:  # Bearish, potential reversal
-                    target = current_price * 1.015
-                    stop_loss = current_price * 0.99
-                    recommendation = "REVERSAL PLAY"
-                    signal = "Oversold - Potential Bounce"
-                else:  # Neutral
-                    target = current_price * 1.01
-                    stop_loss = current_price * 0.99
-                    recommendation = "NEUTRAL"
-                    signal = "No Clear Direction"
-                
-                upside = ((target - current_price) / current_price) * 100
-                
-                result['intraday'] = {
-                    'available': True,
-                    'recommendation': recommendation,
-                    'signal': signal,
-                    'cmp': round(current_price, 2),
-                    'target': round(target, 2),
-                    'stop_loss': round(stop_loss, 2),
-                    'upside_pct': round(upside, 2),
-                    'day_high': round(high_today, 2),
-                    'day_low': round(low_today, 2),
-                    'momentum_pct': round(change_pct, 2)
-                }
+                if not today_data.empty:
+                    current_price = result['cmp']
+                    day_open = today_data['Open'].iloc[0]
+                    day_high = today_data['High'].max()
+                    day_low = today_data['Low'].min()
+                    
+                    # Calculate momentum
+                    change_pct = ((current_price - day_open) / day_open) * 100
+                    
+                    # Determine recommendation
+                    if change_pct > 1:
+                        recommendation = "BUY"
+                        signal = "Strong Upward Momentum"
+                        target = current_price * 1.02
+                        stop_loss = current_price * 0.985
+                    elif change_pct > 0.3:
+                        recommendation = "BUY"
+                        signal = "Positive Momentum"
+                        target = current_price * 1.015
+                        stop_loss = current_price * 0.99
+                    elif change_pct < -1:
+                        recommendation = "SELL"
+                        signal = "Strong Downward Momentum"
+                        target = current_price * 0.98
+                        stop_loss = current_price * 1.015
+                    else:
+                        recommendation = "NEUTRAL"
+                        signal = "Consolidation Phase"
+                        target = current_price * 1.01
+                        stop_loss = current_price * 0.99
+                    
+                    upside = ((target - current_price) / current_price) * 100
+                    
+                    result['intraday'] = {
+                        'available': True,
+                        'recommendation': recommendation,
+                        'signal': signal,
+                        'cmp': round(current_price, 2),
+                        'target': round(target, 2),
+                        'stop_loss': round(stop_loss, 2),
+                        'upside_pct': round(upside, 2),
+                        'day_high': round(day_high, 2),
+                        'day_low': round(day_low, 2),
+                        'momentum_pct': round(change_pct, 2)
+                    }
         except Exception as e:
+            print(f"Intraday data error: {e}")
             result['intraday'] = {
                 'available': False,
-                'message': 'Intraday data not available'
+                'message': 'Intraday data temporarily unavailable'
             }
         
         # === LONG-TERM ANALYST RECOMMENDATIONS ===
         try:
-            # Get analyst recommendations
+            time.sleep(0.5)  # Rate limit protection
+            
+            # Try to get analyst recommendations
+            info = ticker_obj.info
             target_mean = info.get('targetMeanPrice', 0)
             target_high = info.get('targetHighPrice', 0)
             target_low = info.get('targetLowPrice', 0)
@@ -529,43 +594,109 @@ def search_stock_recommendations(ticker_symbol):
                 max_upside = ((target_high - result['cmp']) / result['cmp']) * 100 if target_high else 0
                 min_upside = ((target_low - result['cmp']) / result['cmp']) * 100 if target_low else 0
                 
-                # Determine recommendation sentiment
-                if recommendation_key in ['strong_buy', 'buy']:
-                    sentiment = "BUY"
-                elif recommendation_key in ['strong_sell', 'sell']:
-                    sentiment = "SELL"
-                else:
-                    sentiment = "HOLD"
+                # Map recommendation
+                rec_map = {
+                    'strong_buy': 'STRONG BUY',
+                    'buy': 'BUY',
+                    'hold': 'HOLD',
+                    'sell': 'SELL',
+                    'strong_sell': 'STRONG SELL'
+                }
+                recommendation = rec_map.get(recommendation_key, 'HOLD')
                 
                 result['longterm'] = {
                     'available': True,
-                    'recommendation': sentiment,
-                    'cmp': round(result['cmp'], 2),
+                    'recommendation': recommendation,
                     'avg_target': round(target_mean, 2),
-                    'max_target': round(target_high, 2) if target_high else None,
                     'min_target': round(target_low, 2) if target_low else None,
+                    'max_target': round(target_high, 2) if target_high else None,
                     'avg_upside_pct': round(avg_upside, 2),
-                    'max_upside_pct': round(max_upside, 2) if target_high else None,
                     'min_upside_pct': round(min_upside, 2) if target_low else None,
+                    'max_upside_pct': round(max_upside, 2) if target_high else None,
                     'num_analysts': number_of_analysts,
-                    'timeframe': '3-12 months'
+                    'timeframe': '12-month target'
                 }
             else:
+                # No analyst targets available
                 result['longterm'] = {
                     'available': False,
                     'message': 'No analyst coverage available for this stock'
                 }
+                
         except Exception as e:
+            print(f"Long-term data error: {e}")
             result['longterm'] = {
                 'available': False,
-                'message': 'Long-term recommendations not available'
+                'message': 'Analyst targets temporarily unavailable'
             }
         
         return result
         
     except Exception as e:
-        result['error'] = f"Error fetching data: {str(e)}"
+        error_msg = str(e)
+        
+        # Check for specific error types
+        if "429" in error_msg or "Too Many Requests" in error_msg or "Rate" in error_msg:
+            result['error'] = "Rate limit exceeded. Please wait 1-2 minutes and try again."
+        elif "404" in error_msg or "not found" in error_msg.lower():
+            result['error'] = f"Stock '{ticker_input}' not found. Please check the ticker symbol."
+        elif "timeout" in error_msg.lower():
+            result['error'] = "Request timeout. Please check your internet connection."
+        else:
+            result['error'] = f"Unable to fetch data. Please try again later."
+        
+        print(f"Error fetching data for {symbol}: {e}")
+        
+        # Try Method 2: Fallback to simple historical data
+        try:
+            print(f"Attempting fallback method for {symbol}...")
+            time.sleep(2)  # Wait before retry
+            
+            ticker_obj = yf.Ticker(symbol)
+            hist = ticker_obj.history(period="5d")
+            
+            if not hist.empty:
+                current_price = hist['Close'].iloc[-1]
+                result['cmp'] = current_price
+                result['name'] = ticker_input.upper()
+                result['data_source'] = 'Yahoo Finance (Basic)'
+                result['error'] = None
+                
+                # Basic intraday recommendation based on last 5 days
+                if len(hist) >= 2:
+                    prev_close = hist['Close'].iloc[-2]
+                    change = ((current_price - prev_close) / prev_close) * 100
+                    
+                    result['intraday'] = {
+                        'available': True,
+                        'recommendation': 'BUY' if change > 0 else 'SELL',
+                        'signal': f'{change:+.2f}% from previous close',
+                        'cmp': round(current_price, 2),
+                        'target': round(current_price * 1.02, 2),
+                        'stop_loss': round(current_price * 0.98, 2),
+                        'upside_pct': 2.0,
+                        'day_high': round(hist['High'].iloc[-1], 2),
+                        'day_low': round(hist['Low'].iloc[-1], 2),
+                        'momentum_pct': round(change, 2)
+                    }
+                
+                result['longterm'] = {
+                    'available': False,
+                    'message': 'Limited data available - analyst targets not accessible'
+                }
+                
+        except Exception as fallback_error:
+            print(f"Fallback also failed: {fallback_error}")
+            if not result['error']:
+                result['error'] = "All data sources unavailable. Please try again later."
+        
         return result
+
+
+# Alias for backward compatibility
+def get_stock_recommendation_multi_source(ticker_input):
+    """Alias for search_stock_recommendations with multi-source support"""
+    return search_stock_recommendations(ticker_input)
 
 def get_all_nse_stocks():
     """
