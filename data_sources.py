@@ -572,42 +572,155 @@ def search_stock_recommendations(ticker_symbol):
         result['error'] = f"Error fetching data: {str(e)}"
         return result
 
-def get_all_nse_stocks():
+
+def get_stock_recommendation_multi_source(ticker_symbol):
     """
-    Get ALL NSE stocks from NSE India website
-    Returns a list of all NSE tickers with company names
+    Multi-source wrapper for stock recommendations.
+    Source 1: Yahoo Finance .NS (primary)
+    Source 2: BSE .BO fallback
+    Source 3: Technical analysis fallback for long-term if no analyst data
+    Returns same dict structure as search_stock_recommendations.
     """
-    all_stocks = []
-    
+    # --- Source 1: Yahoo Finance NSE ---
+    result = search_stock_recommendations(ticker_symbol)
+
+    if not result.get('error') and result.get('cmp', 0) > 0:
+        result['data_source'] = 'Yahoo Finance (NSE)'
+
+        # If analyst long-term data missing, fill with technicals
+        if not result.get('longterm') or not result['longterm'].get('available'):
+            try:
+                ns_sym = ticker_symbol if ticker_symbol.endswith('.NS') else f"{ticker_symbol}.NS"
+                tkr = yf.Ticker(ns_sym)
+                hist = tkr.history(period="3mo", interval="1d")
+                if not hist.empty and len(hist) >= 10:
+                    cmp = hist['Close'].iloc[-1]
+                    avg20 = hist['Close'].tail(20).mean() if len(hist) >= 20 else hist['Close'].mean()
+                    avg50 = hist['Close'].tail(50).mean() if len(hist) >= 50 else avg20
+                    if cmp > avg20 and cmp > avg50:
+                        trend, mult = "BUY", 1.12
+                    elif cmp > avg20:
+                        trend, mult = "HOLD", 1.06
+                    else:
+                        trend, mult = "SELL", 1.02
+                    tech_target = cmp * mult
+                    upside = ((tech_target - cmp) / cmp) * 100
+                    result['longterm'] = {
+                        'available': True,
+                        'recommendation': trend,
+                        'cmp': round(cmp, 2),
+                        'avg_target': round(tech_target, 2),
+                        'max_target': round(tech_target * 1.05, 2),
+                        'min_target': round(tech_target * 0.95, 2),
+                        'avg_upside_pct': round(upside, 2),
+                        'max_upside_pct': round(upside + 5, 2),
+                        'min_upside_pct': round(upside - 5, 2),
+                        'num_analysts': 0,
+                        'timeframe': '1-3 months (Technical)',
+                    }
+                    result['data_source'] = 'Yahoo Finance + Technical Analysis'
+            except Exception:
+                pass
+        return result
+
+    # --- Source 2: Try BSE .BO suffix ---
     try:
-        # Try to fetch from NSE API
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'application/json',
-        }
-        
-        # NSE equity list endpoint
-        url = "https://www.nseindia.com/api/equity-stockIndices?index=SECURITIES%20IN%20F%26O"
-        
-        session = requests.Session()
-        session.get("https://www.nseindia.com", headers=headers, timeout=10)
-        response = session.get(url, headers=headers, timeout=10)
-        
-        if response.status_code == 200:
-            data = response.json()
-            for stock in data.get('data', []):
-                symbol = stock.get('symbol', '')
-                company = stock.get('meta', {}).get('companyName', symbol)
-                if symbol:
-                    all_stocks.append(f"{symbol} - {company}")
-        
-    except Exception as e:
-        print(f"NSE API error: {e}")
-    
-    # Fallback: Use comprehensive hardcoded list of major NSE stocks
-    if len(all_stocks) < 100:
-        all_stocks = get_comprehensive_nse_list()
-    
+        clean = ticker_symbol.replace('.NS', '').replace('.BO', '')
+        bo_sym = f"{clean}.BO"
+        tkr2 = yf.Ticker(bo_sym)
+        info2 = tkr2.info
+        cmp2 = tkr2.fast_info.get('lastPrice', 0)
+
+        if cmp2 and cmp2 > 0:
+            result2 = {
+                'symbol': clean,
+                'name': info2.get('shortName', clean),
+                'cmp': cmp2,
+                'intraday': None,
+                'longterm': None,
+                'error': None,
+                'data_source': 'Yahoo Finance (BSE fallback)',
+            }
+
+            # Intraday from history
+            try:
+                hist2 = tkr2.history(period="5d", interval="5m")
+                if not hist2.empty and len(hist2) > 20:
+                    op = hist2['Open'].iloc[0]
+                    cp = hist2['Close'].iloc[-1]
+                    chg = ((cp - op) / op) * 100
+                    if chg > 0.3:
+                        tgt, sl, rec, sig = cp * 1.02, cp * 0.985, "BUY", "Upward Momentum"
+                    elif chg < -0.3:
+                        tgt, sl, rec, sig = cp * 1.015, cp * 0.99, "REVERSAL PLAY", "Oversold - Potential Bounce"
+                    else:
+                        tgt, sl, rec, sig = cp * 1.01, cp * 0.99, "NEUTRAL", "No Clear Direction"
+                    result2['intraday'] = {
+                        'available': True, 'recommendation': rec, 'signal': sig,
+                        'cmp': round(cp, 2), 'target': round(tgt, 2), 'stop_loss': round(sl, 2),
+                        'upside_pct': round(((tgt - cp) / cp) * 100, 2),
+                        'day_high': round(hist2['High'].max(), 2), 'day_low': round(hist2['Low'].min(), 2),
+                        'momentum_pct': round(chg, 2),
+                    }
+                else:
+                    result2['intraday'] = {'available': False, 'message': 'Intraday data not available'}
+            except Exception:
+                result2['intraday'] = {'available': False, 'message': 'Intraday data not available'}
+
+            # Long-term from analyst data
+            try:
+                tm = info2.get('targetMeanPrice', 0)
+                th = info2.get('targetHighPrice', 0)
+                tl = info2.get('targetLowPrice', 0)
+                rk = info2.get('recommendationKey', 'hold')
+                na = info2.get('numberOfAnalystOpinions', 0)
+                if tm and tm > 0:
+                    sent = "BUY" if rk in ['strong_buy', 'buy'] else "SELL" if rk in ['strong_sell', 'sell'] else "HOLD"
+                    result2['longterm'] = {
+                        'available': True, 'recommendation': sent,
+                        'cmp': round(cmp2, 2), 'avg_target': round(tm, 2),
+                        'max_target': round(th, 2) if th else None,
+                        'min_target': round(tl, 2) if tl else None,
+                        'avg_upside_pct': round(((tm - cmp2) / cmp2) * 100, 2),
+                        'max_upside_pct': round(((th - cmp2) / cmp2) * 100, 2) if th else None,
+                        'min_upside_pct': round(((tl - cmp2) / cmp2) * 100, 2) if tl else None,
+                        'num_analysts': na, 'timeframe': '3-12 months',
+                    }
+                else:
+                    # Technical fallback
+                    hist3 = tkr2.history(period="3mo", interval="1d")
+                    if not hist3.empty and len(hist3) >= 10:
+                        avg20 = hist3['Close'].tail(20).mean() if len(hist3) >= 20 else hist3['Close'].mean()
+                        if cmp2 > avg20:
+                            trend2, mult2 = "BUY", 1.10
+                        else:
+                            trend2, mult2 = "HOLD", 1.05
+                        tt = cmp2 * mult2
+                        result2['longterm'] = {
+                            'available': True, 'recommendation': trend2,
+                            'cmp': round(cmp2, 2), 'avg_target': round(tt, 2),
+                            'max_target': round(tt * 1.05, 2), 'min_target': round(tt * 0.95, 2),
+                            'avg_upside_pct': round(((tt - cmp2) / cmp2) * 100, 2),
+                            'max_upside_pct': round(((tt * 1.05 - cmp2) / cmp2) * 100, 2),
+                            'min_upside_pct': round(((tt * 0.95 - cmp2) / cmp2) * 100, 2),
+                            'num_analysts': 0, 'timeframe': '1-3 months (Technical)',
+                        }
+                    else:
+                        result2['longterm'] = {'available': False, 'message': 'No analyst coverage available'}
+            except Exception:
+                result2['longterm'] = {'available': False, 'message': 'Long-term data not available'}
+
+            return result2
+    except Exception:
+        pass
+
+    # --- Return original error result ---
+    return result
+
+
+def _get_all_nse_stocks_v1():
+    """DEPRECATED - kept for reference only. Use get_all_nse_stocks() instead."""
+    all_stocks = get_comprehensive_nse_list()
     return sorted(list(set(all_stocks)))
 
 def get_comprehensive_nse_list():
@@ -864,10 +977,8 @@ def get_comprehensive_nse_list():
     
     return [f"{ticker} - {name}" for ticker, name in stocks_dict.items()]
 
-def get_all_nse_stocks():
-    """Get comprehensive list of ALL NSE stocks"""
-    # This is a comprehensive list of NSE stocks
-    # You can expand this list or fetch from NSE API
+def _get_all_nse_stocks_v2():
+    """DEPRECATED - kept for reference only. Use get_all_nse_stocks() instead."""
     stocks = {
         # Nifty 50
         'ADANIENT': 'Adani Enterprises Ltd.',
