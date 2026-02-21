@@ -3,143 +3,154 @@ import requests
 import pandas as pd
 from datetime import datetime, timedelta
 
-# --- CONFIG & STYLING ---
-st.set_page_config(page_title="Bulk & Block Deals", layout="wide")
+# ---------------- CONFIG ----------------
+st.set_page_config(
+    page_title="Institutional Trade Tracker",
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
 
+# ---------------- STYLING ----------------
 st.markdown("""
 <style>
-    .reportview-container .main .block-container { padding-top: 2rem; }
-    .stDataFrame { border: 1px solid #30363d; border-radius: 8px; }
+body {
+    background: linear-gradient(135deg, #0f172a, #1e293b);
+    color: white;
+}
+.stSelectbox > div {
+    background-color: #1e293b;
+}
+.stButton button {
+    background-color: #2563eb;
+    color: white;
+    border-radius: 8px;
+}
+.block-container {
+    padding-top: 2rem;
+}
+.dataframe {
+    border-radius: 10px;
+}
 </style>
 """, unsafe_allow_html=True)
 
-# --- NSE SESSION HANDLER ---
+# ---------------- NSE SESSION ----------------
 def get_nse_session():
-    s = requests.Session()
-    s.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-        "Accept": "*/*",
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "application/json",
+        "Referer": "https://www.nseindia.com",
         "Accept-Language": "en-US,en;q=0.9"
     })
-    try:
-        s.get("https://www.nseindia.com", timeout=10) # "Warm up" session
-    except:
-        pass
-    return s
+    # Warm up
+    session.get("https://www.nseindia.com", timeout=10)
+    return session
 
-# --- DATA FETCHING ---
-@st.cache_data(ttl=3600)
+# ---------------- GET FULL NSE SYMBOL LIST ----------------
+@st.cache_data(ttl=86400)
 def get_nse_stock_list():
-    """Fetches the official list of all NSE symbols for the dropdown."""
-    try:
-        url = "https://www.nseindia.com/api/equity-stockIndices?index=NIFTY%20500" # Use 500 as a base or EQUITY_L
-        # Fallback to a common list if API fails
-        return ["RELIANCE", "TCS", "HDFCBANK", "ICICIBANK", "INFY", "BHARTIARTL", "SBI", "LICI", "ITC", "HINDUNILVR"]
-    except:
-        return ["RELIANCE", "TCS", "INFY"]
-
-@st.cache_data(ttl=600)
-def fetch_deal_data(deal_type="bulk"):
-    """
-    Fetches deals for the last 30 days.
-    deal_type: 'bulk-deals' or 'block-deals'
-    """
     session = get_nse_session()
+    try:
+        url = "https://www.nseindia.com/api/equity-stockIndices?index=NIFTY%20TOTAL%20MARKET"
+        r = session.get(url, timeout=10)
+        data = r.json()
+        symbols = [item["symbol"] for item in data["data"]]
+        return sorted(set(symbols))
+    except:
+        return []
+
+# ---------------- FETCH DEAL DATA ----------------
+@st.cache_data(ttl=600)
+def fetch_deal_data(deal_type):
+    session = get_nse_session()
+
     to_date = datetime.now().strftime("%d-%m-%Y")
     from_date = (datetime.now() - timedelta(days=30)).strftime("%d-%m-%Y")
-    
+
     url = f"https://www.nseindia.com/api/historical/{deal_type}?from={from_date}&to={to_date}"
-    
+
     try:
-        response = session.get(url, timeout=15)
-        if response.status_code == 200:
-            data = response.json().get('data', [])
-            df = pd.DataFrame(data)
-            if not df.empty:
-                # Standardize columns
-                col_map = {
-                    'tradeDate': 'Date', 'symbol': 'Symbol', 'clientName': 'Client',
-                    'dealType': 'Type', 'quantity': 'Qty', 'price': 'Price', 'buySell': 'Action'
-                }
-                df = df.rename(columns=col_map)
-                df['Date'] = pd.to_datetime(df['Date']).dt.strftime('%d-%b-%Y')
-                return df
+        r = session.get(url, timeout=15)
+        data = r.json().get("data", [])
+
+        if not data:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(data)
+
+        df = df.rename(columns={
+            "tradeDate": "Date",
+            "symbol": "Symbol",
+            "clientName": "Client",
+            "dealType": "Deal Type",
+            "quantity": "Quantity",
+            "price": "Price",
+            "buySell": "Action"
+        })
+
+        df["Date"] = pd.to_datetime(df["Date"])
+        df = df.sort_values("Date", ascending=False)
+
+        return df
+
+    except:
         return pd.DataFrame()
-    except Exception as e:
-        return pd.DataFrame()
 
-# --- UI COMPONENTS ---
-def render_paginated_table(df, key_prefix):
-    if df.empty:
-        st.warning("No data found for this selection.")
-        return
-
-    # Pagination logic
-    items_per_page = 20
-    total_pages = (len(df) // items_per_page) + (1 if len(df) % items_per_page > 0 else 0)
-    
-    if f'{key_prefix}_page' not in st.session_state:
-        st.session_state[f'{key_prefix}_page'] = 1
-        
-    page = st.session_state[f'{key_prefix}_page']
-    start_idx = (page - 1) * items_per_page
-    end_idx = start_idx + items_per_page
-    
-    # Display table
-    st.table(df.iloc[start_idx:end_idx])
-    
-    # Pagination buttons
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col1:
-        if st.button("⬅️ Previous", key=f"{key_prefix}_prev", disabled=page == 1):
-            st.session_state[f'{key_prefix}_page'] -= 1
-            st.rerun()
-    with col2:
-        st.write(f"Page {page} of {total_pages}")
-    with col3:
-        if st.button("Next ➡️", key=f"{key_prefix}_next", disabled=page == total_pages):
-            st.session_state[f'{key_prefix}_page'] += 1
-            st.rerun()
-
-# --- MAIN APP ---
+# ---------------- HEADER ----------------
 st.title("💼 Institutional Trade Tracker")
-st.subheader("Bulk & Block Deals (Last 30 Days)")
+st.caption("Bulk & Block Deals — Last 30 Days")
 
-# Search Section
-all_symbols = get_nse_stock_list()
-search_col, refresh_col = st.columns([4, 1])
+# ---------------- SEARCH SECTION ----------------
+symbols = get_nse_stock_list()
 
-with search_col:
+col1, col2 = st.columns([4,1])
+
+with col1:
     selected_stock = st.selectbox(
-        "🔍 Search Stock Symbol (Live NSE List)",
-        options=["ALL STOCKS"] + sorted(all_symbols),
-        index=0
+        "🔍 Search NSE Symbol",
+        options=["ALL STOCKS"] + symbols
     )
 
-with refresh_col:
+with col2:
     if st.button("🔄 Refresh Data", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
 
-# Fetch Data
-bulk_df = fetch_deal_data("bulk-deals")
-block_df = fetch_deal_data("block-deals")
+# ---------------- LOAD DATA ----------------
+with st.spinner("Fetching latest institutional trades..."):
+    bulk_df = fetch_deal_data("bulk-deals")
+    block_df = fetch_deal_data("block-deals")
 
-# Filtering based on search
+# ---------------- FILTER ----------------
 if selected_stock != "ALL STOCKS":
-    bulk_df = bulk_df[bulk_df['Symbol'] == selected_stock] if not bulk_df.empty else bulk_df
-    block_df = block_df[block_df['Symbol'] == selected_stock] if not block_df.empty else block_df
+    bulk_df = bulk_df[bulk_df["Symbol"] == selected_stock]
+    block_df = block_df[block_df["Symbol"] == selected_stock]
 
-# Display Tabs
+# ---------------- TABS ----------------
 tab1, tab2 = st.tabs(["📦 Bulk Deals", "🧱 Block Deals"])
 
 with tab1:
-    st.caption("Trades > 0.5% of total equity")
-    render_paginated_table(bulk_df, "bulk")
+    st.markdown("### Bulk Deals (>0.5% equity)")
+    if bulk_df.empty:
+        st.warning("No bulk deals found for selected period.")
+    else:
+        st.dataframe(
+            bulk_df,
+            use_container_width=True,
+            height=500
+        )
 
 with tab2:
-    st.caption("Large pre-negotiated institutional trades")
-    render_paginated_table(block_df, "block")
+    st.markdown("### Block Deals (Large Institutional Trades)")
+    if block_df.empty:
+        st.warning("No block deals found for selected period.")
+    else:
+        st.dataframe(
+            block_df,
+            use_container_width=True,
+            height=500
+        )
 
 st.divider()
-st.info("💡 **Tip:** Use the dropdown to filter by a specific stock. If the table is empty, NSE may have no records for that stock in the last 30 days.")
+st.success("Data Source: NSE India | Auto-refresh every 10 minutes")
