@@ -1,156 +1,88 @@
 import streamlit as st
-import requests
 import pandas as pd
-from datetime import datetime, timedelta
+import requests
+from io import StringIO
 
-# ---------------- CONFIG ----------------
-st.set_page_config(
-    page_title="Institutional Trade Tracker",
-    layout="wide",
-    initial_sidebar_state="collapsed"
-)
+st.set_page_config(page_title="Institutional Trade Tracker", layout="wide")
 
-# ---------------- STYLING ----------------
+# ---------- Styling ----------
 st.markdown("""
 <style>
-body {
-    background: linear-gradient(135deg, #0f172a, #1e293b);
-    color: white;
-}
-.stSelectbox > div {
-    background-color: #1e293b;
-}
-.stButton button {
+.block-container { padding-top: 2rem; }
+.stButton>button {
+    border-radius: 8px;
     background-color: #2563eb;
     color: white;
-    border-radius: 8px;
-}
-.block-container {
-    padding-top: 2rem;
-}
-.dataframe {
-    border-radius: 10px;
 }
 </style>
 """, unsafe_allow_html=True)
 
-# ---------------- NSE SESSION ----------------
-def get_nse_session():
-    session = requests.Session()
-    session.headers.update({
-        "User-Agent": "Mozilla/5.0",
-        "Accept": "application/json",
-        "Referer": "https://www.nseindia.com",
-        "Accept-Language": "en-US,en;q=0.9"
-    })
-    # Warm up
-    session.get("https://www.nseindia.com", timeout=10)
-    return session
+st.title("💼 Institutional Trade Tracker")
+st.caption("Live Bulk & Block Deals")
 
-# ---------------- GET FULL NSE SYMBOL LIST ----------------
-@st.cache_data(ttl=86400)
-def get_nse_stock_list():
-    session = get_nse_session()
-    try:
-        url = "https://www.nseindia.com/api/equity-stockIndices?index=NIFTY%20TOTAL%20MARKET"
-        r = session.get(url, timeout=10)
-        data = r.json()
-        symbols = [item["symbol"] for item in data["data"]]
-        return sorted(set(symbols))
-    except:
-        return []
-
-# ---------------- FETCH DEAL DATA ----------------
+# ---------- Fetch CSV Data ----------
 @st.cache_data(ttl=600)
-def fetch_deal_data(deal_type):
-    session = get_nse_session()
-
-    to_date = datetime.now().strftime("%d-%m-%Y")
-    from_date = (datetime.now() - timedelta(days=30)).strftime("%d-%m-%Y")
-
-    url = f"https://www.nseindia.com/api/historical/{deal_type}?from={from_date}&to={to_date}"
-
+def fetch_bulk_deals():
     try:
-        r = session.get(url, timeout=15)
-        data = r.json().get("data", [])
-
-        if not data:
-            return pd.DataFrame()
-
-        df = pd.DataFrame(data)
-
-        df = df.rename(columns={
-            "tradeDate": "Date",
-            "symbol": "Symbol",
-            "clientName": "Client",
-            "dealType": "Deal Type",
-            "quantity": "Quantity",
-            "price": "Price",
-            "buySell": "Action"
-        })
-
-        df["Date"] = pd.to_datetime(df["Date"])
-        df = df.sort_values("Date", ascending=False)
-
+        url = "https://archives.nseindia.com/content/equities/bulk.csv"
+        r = requests.get(url, timeout=10)
+        df = pd.read_csv(StringIO(r.text))
         return df
-
     except:
         return pd.DataFrame()
 
-# ---------------- HEADER ----------------
-st.title("💼 Institutional Trade Tracker")
-st.caption("Bulk & Block Deals — Last 30 Days")
+@st.cache_data(ttl=600)
+def fetch_block_deals():
+    try:
+        url = "https://archives.nseindia.com/content/equities/block.csv"
+        r = requests.get(url, timeout=10)
+        df = pd.read_csv(StringIO(r.text))
+        return df
+    except:
+        return pd.DataFrame()
 
-# ---------------- SEARCH SECTION ----------------
-symbols = get_nse_stock_list()
+# ---------- Layout ----------
+top_col1, top_col2 = st.columns([6,1])
 
-col1, col2 = st.columns([4,1])
-
-with col1:
-    selected_stock = st.selectbox(
-        "🔍 Search NSE Symbol",
-        options=["ALL STOCKS"] + symbols
-    )
-
-with col2:
-    if st.button("🔄 Refresh Data", use_container_width=True):
+with top_col2:
+    if st.button("🔄 Refresh"):
         st.cache_data.clear()
         st.rerun()
 
-# ---------------- LOAD DATA ----------------
-with st.spinner("Fetching latest institutional trades..."):
-    bulk_df = fetch_deal_data("bulk-deals")
-    block_df = fetch_deal_data("block-deals")
+st.divider()
 
-# ---------------- FILTER ----------------
-if selected_stock != "ALL STOCKS":
-    bulk_df = bulk_df[bulk_df["Symbol"] == selected_stock]
-    block_df = block_df[block_df["Symbol"] == selected_stock]
+# ---------- Two Wide Widgets ----------
+col1, col2 = st.columns(2)
 
-# ---------------- TABS ----------------
-tab1, tab2 = st.tabs(["📦 Bulk Deals", "🧱 Block Deals"])
+# BULK DEALS WIDGET
+with col1:
+    st.subheader("📦 Bulk Deals")
+    bulk_df = fetch_bulk_deals()
 
-with tab1:
-    st.markdown("### Bulk Deals (>0.5% equity)")
     if bulk_df.empty:
-        st.warning("No bulk deals found for selected period.")
+        st.warning("No bulk deals data available.")
     else:
-        st.dataframe(
-            bulk_df,
-            use_container_width=True,
-            height=500
-        )
+        search_bulk = st.text_input("Filter Bulk by Symbol", key="bulk_search")
+        if search_bulk:
+            bulk_df = bulk_df[
+                bulk_df["Symbol"].str.contains(search_bulk.upper(), na=False)
+            ]
+        st.dataframe(bulk_df, height=500, use_container_width=True)
 
-with tab2:
-    st.markdown("### Block Deals (Large Institutional Trades)")
+# BLOCK DEALS WIDGET
+with col2:
+    st.subheader("🧱 Block Deals")
+    block_df = fetch_block_deals()
+
     if block_df.empty:
-        st.warning("No block deals found for selected period.")
+        st.warning("No block deals data available.")
     else:
-        st.dataframe(
-            block_df,
-            use_container_width=True,
-            height=500
-        )
+        search_block = st.text_input("Filter Block by Symbol", key="block_search")
+        if search_block:
+            block_df = block_df[
+                block_df["Symbol"].str.contains(search_block.upper(), na=False)
+            ]
+        st.dataframe(block_df, height=500, use_container_width=True)
 
 st.divider()
-st.success("Data Source: NSE India | Auto-refresh every 10 minutes")
+st.success("Data Source: NSE Archives (CSV)")
