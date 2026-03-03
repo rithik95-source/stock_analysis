@@ -9,6 +9,14 @@ st.set_page_config(page_title="Institutional Trade Tracker", layout="wide")
 # ---------- STYLING ----------
 st.markdown("""
 <style>
+/* Import Montserrat Font */
+@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600&display=swap');
+
+/* Apply Montserrat to all text elements in Streamlit */
+html, body, [class*="css"], [class*="st-"] {
+    font-family: 'Montserrat', sans-serif !important;
+}
+
 .block-container { padding-top: 2rem; }
 .stButton>button {
     border-radius: 8px;
@@ -33,20 +41,16 @@ def get_symbol_list():
         return []
 
 # ---------- UI INPUTS ----------
-col1, col2 = st.columns([2, 1])
+# Removed the columns so the button naturally stacks below the selectbox on the left
+symbols = get_symbol_list()
+selected_symbol = st.selectbox(
+    "🔍 Search NSE Symbol",
+    options=["ALL STOCKS"] + symbols
+)
 
-with col1:
-    symbols = get_symbol_list()
-    selected_symbol = st.selectbox(
-        "🔍 Search NSE Symbol",
-        options=["ALL STOCKS"] + symbols
-    )
-
-with col2:
-    st.write("##") # Alignment spacing
-    if st.button("🔄 Refresh Data"):
-        st.cache_data.clear()
-        st.rerun()
+if st.button("🔄 Refresh Data"):
+    st.cache_data.clear()
+    st.rerun()
 
 st.divider()
 
@@ -99,10 +103,32 @@ else:
     else:
         # Move 'Deal Type' to the front for better visibility
         cols = display_df.columns.tolist()
-        cols = ['Deal Type'] + [c for c in cols if c != 'Deal Type']
-        display_df = display_df[cols]
+        if 'Deal Type' in cols:
+            cols = ['Deal Type'] + [c for c in cols if c != 'Deal Type']
+            display_df = display_df[cols]
         
-        st.dataframe(display_df, height=500, use_container_width=True)
+        # Force numeric types so formatting works perfectly
+        if "Quantity Traded" in display_df.columns:
+            display_df["Quantity Traded"] = pd.to_numeric(display_df["Quantity Traded"], errors="coerce")
+        if "Trade Price / Wght. Avg. Price" in display_df.columns:
+            display_df["Trade Price / Wght. Avg. Price"] = pd.to_numeric(display_df["Trade Price / Wght. Avg. Price"], errors="coerce")
+        
+        # Display with specific column configuration for formatting
+        st.dataframe(
+            display_df, 
+            height=500, 
+            use_container_width=True,
+            column_config={
+                "Quantity Traded": st.column_config.NumberColumn(
+                    "Quantity Traded",
+                    format="%,d"  # Comma separated integer
+                ),
+                "Trade Price / Wght. Avg. Price": st.column_config.NumberColumn(
+                    "Trade Price / Wght. Avg. Price",
+                    format="%,.2f" # Comma separated float with exactly 2 decimal places
+                )
+            }
+        )
 
 st.divider()
 
