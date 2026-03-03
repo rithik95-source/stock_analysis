@@ -128,32 +128,63 @@ else:
         )
 
 st.divider()
-
 # ---------- NEWS SECTION ----------
-st.subheader("📰 Top 20 News Related to Deals")
+st.subheader("📰 Top Market & Institutional News")
 
 @st.cache_data(ttl=1800)
 def fetch_news():
-    try:
-        rss_url = "https://www.moneycontrol.com/rss/MCtopnews.xml"
-        feed = feedparser.parse(rss_url)
-        articles = []
-        for entry in feed.entries:
-            if ("bulk" in entry.title.lower() or 
-                "block deal" in entry.title.lower() or 
-                "institution" in entry.title.lower()):
-                articles.append({
-                    "Title": entry.title,
-                    "Link": entry.link
-                })
-        return articles[:20]
-    except:
-        return []
+    # 1. Use multiple dedicated market feeds instead of just one general feed
+    rss_urls = [
+        "https://www.moneycontrol.com/rss/buzzingstocks.xml",
+        "https://www.moneycontrol.com/rss/marketreports.xml",
+        "https://economictimes.indiatimes.com/markets/rssfeeds/2146842.cms" # ET Markets
+    ]
+    
+    # 2. Broaden the keyword search
+    keywords = [
+        "bulk", "block", "stake", "institution", "fund", "investor", 
+        "acquire", "shares", "equity", "bought", "sold", "fpi", "fii", "dii"
+    ]
+    
+    articles = []
+    seen_titles = set() # Prevent duplicate news articles
+    
+    for url in rss_urls:
+        try:
+            feed = feedparser.parse(url)
+            for entry in feed.entries:
+                title_lower = entry.title.lower()
+                # Use .get() safely in case an RSS feed doesn't have a summary
+                summary_lower = entry.get('summary', '').lower() 
+                
+                # Check if ANY keyword is in the Title OR the Summary
+                if any(kw in title_lower for kw in keywords) or any(kw in summary_lower for kw in keywords):
+                    if entry.title not in seen_titles:
+                        articles.append({
+                            "Title": entry.title,
+                            "Link": entry.link
+                        })
+                        seen_titles.add(entry.title)
+        except Exception:
+            continue # If one feed fails, keep going with the others
+            
+    # 3. Fallback: If we still found less than 3 specific articles, just show top general market news
+    if len(articles) < 3:
+        try:
+            fallback_feed = feedparser.parse("https://economictimes.indiatimes.com/markets/rssfeeds/2146842.cms")
+            for entry in fallback_feed.entries[:5]: # Grab top 5
+                if entry.title not in seen_titles:
+                    articles.append({"Title": entry.title, "Link": entry.link})
+                    seen_titles.add(entry.title)
+        except Exception:
+            pass
+
+    return articles[:20]
 
 news_items = fetch_news()
 
 if not news_items:
-    st.info("No recent related news found.")
+    st.info("No recent related news found right now. Check back later.")
 else:
     for item in news_items:
         st.markdown(f"• [{item['Title']}]({item['Link']})")
