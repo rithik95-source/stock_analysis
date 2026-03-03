@@ -41,7 +41,7 @@ def get_symbol_list():
         return []
 
 # ---------- UI INPUTS ----------
-# Removed the columns so the button naturally stacks below the selectbox on the left
+# Stacking these linearly aligns the button to the left perfectly
 symbols = get_symbol_list()
 selected_symbol = st.selectbox(
     "🔍 Search NSE Symbol",
@@ -113,21 +113,18 @@ else:
         if "Trade Price / Wght. Avg. Price" in display_df.columns:
             display_df["Trade Price / Wght. Avg. Price"] = pd.to_numeric(display_df["Trade Price / Wght. Avg. Price"], errors="coerce")
         
-        # Display with specific column configuration for formatting
+        # Create a format dictionary for Pandas Styler
+        format_dict = {}
+        if "Quantity Traded" in display_df.columns:
+            format_dict["Quantity Traded"] = "{:,.0f}"  # Comma separated integer
+        if "Trade Price / Wght. Avg. Price" in display_df.columns:
+            format_dict["Trade Price / Wght. Avg. Price"] = "{:,.2f}"  # Comma separated float with 2 decimals
+            
+        # Display using Pandas styling instead of column_config
         st.dataframe(
-            display_df, 
+            display_df.style.format(format_dict, na_rep="-"), 
             height=500, 
-            use_container_width=True,
-            column_config={
-                "Quantity Traded": st.column_config.NumberColumn(
-                    "Quantity Traded",
-                    format="%,d"  # Comma separated integer
-                ),
-                "Trade Price / Wght. Avg. Price": st.column_config.NumberColumn(
-                    "Trade Price / Wght. Avg. Price",
-                    format="%,.2f" # Comma separated float with exactly 2 decimal places
-                )
-            }
+            use_container_width=True
         )
 
 st.divider()
