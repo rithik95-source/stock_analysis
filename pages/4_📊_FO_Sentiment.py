@@ -11,7 +11,6 @@ import urllib.parse
 
 st.set_page_config(page_title="F&O Sentiment", layout="wide", page_icon="📊")
 
-# 1. Strict Montserrat Font Enforcement
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600;700&display=swap');
@@ -68,16 +67,36 @@ def fetch_fii_dii():
         return pd.DataFrame(), str(e)
 
 @st.cache_data(ttl=86400) # Caches for 24 hours
-def fetch_live_fno_symbols():
+def fetch_fno_mapping():
     try:
         # Fetch live list of tradable instruments from Zerodha's open API
         df = pd.read_csv("https://api.kite.trade/instruments")
-        # Filter for NSE Futures segment to get unique F&O underlying names
-        live_symbols = df[df['segment'] == 'NFO-FUT']['name'].unique().tolist()
-        return sorted(live_symbols)
+        
+        # Get F&O underlying symbols
+        fno_underlyings = set(df[df['segment'] == 'NFO-FUT']['name'].dropna().unique())
+        
+        # Get Cash market to map ticker to full company name
+        nse_df = df[df['segment'] == 'NSE'][['tradingsymbol', 'name']].dropna()
+        fno_df = nse_df[nse_df['tradingsymbol'].isin(fno_underlyings)]
+        
+        # Build searchable list of "TICKER - Company Name"
+        mapping = []
+        for _, row in fno_df.iterrows():
+            mapping.append(f"{row['tradingsymbol']} - {row['name']}")
+            
+        # Manually add indices (they aren't in the NSE equity segment)
+        indices = [
+            'NIFTY - NIFTY 50', 
+            'BANKNIFTY - NIFTY BANK', 
+            'FINNIFTY - NIFTY FIN SERVICE', 
+            'MIDCPNIFTY - NIFTY MIDCAP SELECT', 
+            'NIFTYNXT50 - NIFTY NEXT 50'
+        ]
+        
+        return sorted(indices + mapping)
     except Exception:
         # Fallback list if the request fails
-        return ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'RELIANCE', 'HDFCBANK', 'ITC', 'INFY', 'TCS']
+        return ['NIFTY - NIFTY 50', 'BANKNIFTY - NIFTY BANK', 'RELIANCE - RELIANCE INDUSTRIES LTD', 'ITC - ITC LTD']
 
 @st.cache_data(ttl=600)
 def fetch_option_chain(symbol):
@@ -172,33 +191,27 @@ elif not fii_df.empty:
     if date_col:
         fii_df[date_col] = pd.to_datetime(fii_df[date_col], errors='coerce')
 
-    # Data Table Format
-    display_df = fii_df.copy()
-    st.dataframe(
-        display_df,
-        column_config={
-            cat_col: "Category",
-            date_col: st.column_config.DateColumn("Date", format="DD-MMM-YYYY"),
-            buy_col: st.column_config.NumberColumn("Buy Value (₹ Cr)", format="%,.2f"),
-            sell_col: st.column_config.NumberColumn("Sell Value (₹ Cr)", format="%,.2f"),
-            net_col: st.column_config.NumberColumn("Net Value (₹ Cr)", format="%,.2f"),
-        },
-        hide_index=True,
-        use_container_width=True
-    )
-
     # Net Activity Summary
-    if net_col:
-        st.markdown("**Latest Net Activity**")
-        metric_cols = st.columns(2)
-        if cat_col:
-            categories = fii_df[cat_col].dropna().unique()
-            for i, cat in enumerate(categories[:2]):
-                cat_val = fii_df[fii_df[cat_col] == cat][net_col].sum()
-                with metric_cols[i]:
-                    st.metric(f"{cat} Net Value", f"₹ {cat_val:,.2f} Cr", 
-                              delta="Net Buying" if cat_val > 0 else "Net Selling",
-                              delta_color="normal")
+    if net_col and cat_col:
+        dii_net = fii_df[fii_df[cat_col].str.contains('DII', case=False, na=False)][net_col].sum()
+        fii_net = fii_df[fii_df[cat_col].str.contains('FII|FPI', case=False, na=False)][net_col].sum()
+        overall_net = dii_net + fii_net
+        
+        st.markdown("**Latest Daily Net Activity**")
+        metric_cols = st.columns(3)
+        
+        with metric_cols[0]:
+            st.metric("DII Net Value", f"₹ {dii_net:,.2f} Cr", 
+                      delta="Net Buying" if dii_net > 0 else "Net Selling",
+                      delta_color="normal")
+        with metric_cols[1]:
+            st.metric("FII/FPI Net Value", f"₹ {fii_net:,.2f} Cr", 
+                      delta="Net Buying" if fii_net > 0 else "Net Selling",
+                      delta_color="normal")
+        with metric_cols[2]:
+            st.metric("Overall Day Net", f"₹ {overall_net:,.2f} Cr", 
+                      delta="Net Inflow" if overall_net > 0 else "Net Outflow",
+                      delta_color="normal")
 
     # Flow Chart
     if date_col and net_col and cat_col:
@@ -238,24 +251,21 @@ st.divider()
 # SECTION 2 — Stock / Index Option Chain
 # ══════════════════════════════════════════════════════════════════════════════
 st.markdown("### 🎯 Stock / Index Option Chain Sentiment")
-st.caption("Search for any F&O stock or Index to view the full Option Chain.")
 
-# Dynamic F&O Symbols Fetching
-fo_symbols = fetch_live_fno_symbols()
+# Dynamic F&O Mapping (Ticker - Company Name)
+fno_options = fetch_fno_mapping()
 
-q = st.text_input("Search F&O Symbol", placeholder="e.g. NIFTY, ITC, RELIANCE...", label_visibility="collapsed")
-
-query = q.strip().upper()
-filtered_syms = [s for s in fo_symbols if query in s] if query else fo_symbols
-
-selected_sym = st.selectbox(
-    "Select Stock/Index",
-    options=[""] + filtered_syms,
+selected_option = st.selectbox(
+    "Search by Ticker or Company Name",
+    options=[""] + fno_options,
     index=0,
-    label_visibility="collapsed",
+    placeholder="Start typing to search (e.g., RELIANCE or TATA MOTORS)...",
 )
 
-if selected_sym:
+if selected_option:
+    # Extract just the ticker symbol from the selected string
+    selected_sym = selected_option.split(" - ")[0].strip()
+    
     with st.spinner(f"Fetching complete option chain for {selected_sym}..."):
         oc_df, underlying, oc_err = fetch_option_chain(selected_sym)
 
@@ -263,7 +273,7 @@ if selected_sym:
         st.warning(f"⚠️ {oc_err}")
         st.info("Market data might be unavailable due to a holiday or after-hours system maintenance.")
     elif not oc_df.empty:
-        st.markdown(f"#### **{selected_sym}** — Spot Price: ₹ {underlying:,.2f}")
+        st.markdown(f"#### **{selected_option}** — Spot Price: ₹ {underlying:,.2f}")
 
         total_ce = oc_df['CE OI'].sum()
         total_pe = oc_df['PE OI'].sum()
