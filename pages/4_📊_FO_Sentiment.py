@@ -8,18 +8,26 @@ import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import urllib.parse
+import time
 
 st.set_page_config(page_title="F&O Sentiment", layout="wide", page_icon="📊")
 
+# 1. CSS Fix: Added protection for Material Icons to stop the _arrow_right_ overlap
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600;700&display=swap');
+    
     html, body, [class*="css"], [class*="st-"], .stDataFrame, .stSelectbox { 
         font-family: 'Montserrat', sans-serif !important; 
     }
     h1, h2, h3, h4, h5, h6 { 
         font-family: 'Montserrat', sans-serif !important; 
         font-weight: 600 !important; 
+    }
+    
+    /* Protect Streamlit's native icons from the font override */
+    .material-symbols-rounded, .material-symbols-outlined {
+        font-family: 'Material Symbols Rounded' !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -30,17 +38,22 @@ st.divider()
 
 NSE_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Accept': 'application/json, text/plain, */*',
+    'Accept': '*/*',
     'Accept-Language': 'en-US,en;q=0.9',
-    'Referer': 'https://www.nseindia.com/',
+    'Accept-Encoding': 'gzip, deflate, br',
     'Connection': 'keep-alive',
 }
 
+# 2. Enhanced Session Generator to bypass weekend/holiday bot blocks
 def nse_session():
     s = requests.Session()
     s.headers.update(NSE_HEADERS)
     try:
+        # Step 1: Hit homepage to get initial cookies
         s.get('https://www.nseindia.com', timeout=10)
+        time.sleep(0.5)
+        # Step 2: Hit option chain page to get specific API clearance cookies
+        s.get('https://www.nseindia.com/option-chain', timeout=10)
     except Exception:
         pass
     return s
@@ -66,37 +79,32 @@ def fetch_fii_dii():
     except Exception as e:
         return pd.DataFrame(), str(e)
 
-@st.cache_data(ttl=86400) # Caches for 24 hours
+@st.cache_data(ttl=86400) 
 def fetch_fno_mapping():
     try:
-        # Fetch live list of tradable instruments from Zerodha's open API
         df = pd.read_csv("https://api.kite.trade/instruments")
         
-        # Get F&O underlying symbols
         fno_underlyings = set(df[df['segment'] == 'NFO-FUT']['name'].dropna().unique())
         
-        # Get Cash market to map ticker to full company name
         nse_df = df[df['segment'] == 'NSE'][['tradingsymbol', 'name']].dropna()
         fno_df = nse_df[nse_df['tradingsymbol'].isin(fno_underlyings)]
         
-        # Build searchable list of "TICKER - Company Name"
         mapping = []
         for _, row in fno_df.iterrows():
             mapping.append(f"{row['tradingsymbol']} - {row['name']}")
             
-        # Manually add indices (they aren't in the NSE equity segment)
+        # 3. Explicitly adding Indian Indices
         indices = [
-            'NIFTY - NIFTY 50', 
-            'BANKNIFTY - NIFTY BANK', 
-            'FINNIFTY - NIFTY FIN SERVICE', 
-            'MIDCPNIFTY - NIFTY MIDCAP SELECT', 
-            'NIFTYNXT50 - NIFTY NEXT 50'
+            'NIFTY - NIFTY 50 INDEX', 
+            'BANKNIFTY - NIFTY BANK INDEX', 
+            'FINNIFTY - NIFTY FIN SERVICE INDEX', 
+            'MIDCPNIFTY - NIFTY MIDCAP SELECT INDEX', 
+            'NIFTYNXT50 - NIFTY NEXT 50 INDEX'
         ]
         
-        return sorted(indices + mapping)
+        return sorted(indices) + sorted(mapping)
     except Exception:
-        # Fallback list if the request fails
-        return ['NIFTY - NIFTY 50', 'BANKNIFTY - NIFTY BANK', 'RELIANCE - RELIANCE INDUSTRIES LTD', 'ITC - ITC LTD']
+        return ['NIFTY - NIFTY 50', 'BANKNIFTY - NIFTY BANK', 'RELIANCE - RELIANCE INDUSTRIES LTD']
 
 @st.cache_data(ttl=600)
 def fetch_option_chain(symbol):
@@ -107,17 +115,23 @@ def fetch_option_chain(symbol):
     if sym in index_syms:
         url = f"https://www.nseindia.com/api/option-chain-indices?symbol={sym}"
     else:
-        # Safely encode symbols like M&M
         sym_encoded = urllib.parse.quote(sym)
         url = f"https://www.nseindia.com/api/option-chain-equities?symbol={sym_encoded}"
         
     try:
         r = s.get(url, timeout=15)
+        
+        # Retry mechanism if unauthorized or blocked initially
+        if r.status_code in [401, 403]:
+            s = nse_session() 
+            r = s.get(url, timeout=15)
+
         if r.status_code == 200:
             data = r.json()
             records = data.get('records', {})
             oc_data = records.get('data', [])
             underlying = records.get('underlyingValue', 0)
+            
             if oc_data:
                 rows = []
                 for item in oc_data:
@@ -134,7 +148,7 @@ def fetch_option_chain(symbol):
                         'PE LTP': pe.get('lastPrice', 0) if pe else 0,
                     })
                 return pd.DataFrame(rows), float(underlying), None
-            return pd.DataFrame(), 0.0, "No option chain data returned."
+            return pd.DataFrame(), 0.0, "No option chain data returned. (Holiday/Weekend filter check)"
         return pd.DataFrame(), 0.0, f"NSE returned {r.status_code}"
     except Exception as e:
         return pd.DataFrame(), 0.0, str(e)
@@ -259,11 +273,10 @@ selected_option = st.selectbox(
     "Search by Ticker or Company Name",
     options=[""] + fno_options,
     index=0,
-    placeholder="Start typing to search (e.g., RELIANCE or TATA MOTORS)...",
+    placeholder="Start typing to search (e.g., NIFTY, RELIANCE, ABCAPITAL)...",
 )
 
 if selected_option:
-    # Extract just the ticker symbol from the selected string
     selected_sym = selected_option.split(" - ")[0].strip()
     
     with st.spinner(f"Fetching complete option chain for {selected_sym}..."):
@@ -271,7 +284,7 @@ if selected_option:
 
     if oc_err and oc_df.empty:
         st.warning(f"⚠️ {oc_err}")
-        st.info("Market data might be unavailable due to a holiday or after-hours system maintenance.")
+        st.info("Data could not be fetched. This often happens on weekends when NSE resets the F&O data tables or blocks API access.")
     elif not oc_df.empty:
         st.markdown(f"#### **{selected_option}** — Spot Price: ₹ {underlying:,.2f}")
 
