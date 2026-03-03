@@ -4,35 +4,28 @@ import requests
 import datetime
 from io import StringIO
 import feedparser
+import time
 
+# ---------- PAGE SETUP ----------
 st.set_page_config(page_title="Institutional Trade Tracker", layout="wide")
 
-# ---------- GLOBAL STYLING ----------
 st.markdown("""
-<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&display=swap" rel="stylesheet">
-
 <style>
-html, body, [class*="css"]  {
-    font-family: 'Montserrat', sans-serif;
-}
-
-.block-container { 
-    padding-top: 2rem; 
-}
-
-.stButton>button {
-    border-radius: 8px;
-    background-color: #2563eb;
-    color: white;
-    font-weight: 600;
-}
+    .stButton>button {
+        border-radius: 8px;
+        background-color: #2563eb;
+        color: white;
+        font-weight: 600;
+        width: 100%;
+    }
+    .main { background-color: #0e1117; }
 </style>
 """, unsafe_allow_html=True)
 
 st.title("💼 Institutional Trade Tracker")
-st.caption("Historical Bulk & Block Deals + Related News")
+st.caption("Historical Bulk & Block Deals (NSE India) + Related News")
 
-# ---------- NSE SYMBOL LIST ----------
+# ---------- SYMBOL LIST (Public Archive) ----------
 @st.cache_data(ttl=86400)
 def get_symbol_list():
     try:
@@ -43,148 +36,142 @@ def get_symbol_list():
     except:
         return []
 
-symbols = get_symbol_list()
-
-selected_symbol = st.selectbox(
-    "🔍 Search NSE Symbol",
-    options=["ALL STOCKS"] + symbols
-)
-
-date_filter = st.selectbox(
-    "📅 Select Date Range",
-    ["1D", "1W", "1M", "3M", "6M", "1Y"]
-)
-
-if st.button("🔄 Refresh Data"):
-    st.cache_data.clear()
-    st.rerun()
+# ---------- UI INPUTS ----------
+with st.container():
+    col1, col2, col3 = st.columns([2, 1, 1])
+    
+    with col1:
+        symbols = get_symbol_list()
+        selected_symbol = st.selectbox("🔍 Search NSE Symbol", options=["ALL STOCKS"] + symbols)
+    
+    with col2:
+        date_filter = st.selectbox("📅 Select Date Range", ["1D", "1W", "1M", "3M", "6M", "1Y"], index=2)
+    
+    with col3:
+        st.write("##")
+        if st.button("🔄 Refresh Data"):
+            st.cache_data.clear()
+            st.rerun()
 
 st.divider()
 
-# ---------- FETCH HISTORICAL BULK + BLOCK ----------
+# ---------- DATA FETCHING (NSE Stealth Mode) ----------
 @st.cache_data(ttl=600)
-def fetch_historical_deals(date_range):
-
+def fetch_nse_data(date_range):
     session = requests.Session()
-
+    
+    # These specific headers are the secret to not getting blocked
     headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Accept": "application/json"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "Referer": "https://www.nseindia.com/report-detail/display-bulk-and-block-deals",
+        "X-Requested-With": "XMLHttpRequest"
     }
 
     try:
-        # Important: establish NSE session
+        # Step 1: Visit home to get cookies (The Handshake)
         session.get("https://www.nseindia.com", headers=headers, timeout=10)
+        time.sleep(1) # Human-like pause
 
+        # Step 2: Date Prep
         end_date = datetime.date.today()
-
-        if date_range == "1D":
-            start_date = end_date - datetime.timedelta(days=1)
-        elif date_range == "1W":
-            start_date = end_date - datetime.timedelta(weeks=1)
-        elif date_range == "1M":
-            start_date = end_date - datetime.timedelta(days=30)
-        elif date_range == "3M":
-            start_date = end_date - datetime.timedelta(days=90)
-        elif date_range == "6M":
-            start_date = end_date - datetime.timedelta(days=180)
-        else:
-            start_date = end_date - datetime.timedelta(days=365)
+        range_map = {"1D": 1, "1W": 7, "1M": 30, "3M": 90, "6M": 180, "1Y": 365}
+        start_date = end_date - datetime.timedelta(days=range_map.get(date_range, 30))
 
         params = {
             "from": start_date.strftime("%d-%m-%Y"),
             "to": end_date.strftime("%d-%m-%Y")
         }
 
+        # Step 3: Fetch Bulk and Block separately
         bulk_url = "https://www.nseindia.com/api/historical/bulk-deals"
         block_url = "https://www.nseindia.com/api/historical/block-deals"
 
-        bulk = session.get(bulk_url, headers=headers, params=params, timeout=10).json()
-        block = session.get(block_url, headers=headers, params=params, timeout=10).json()
+        bulk_res = session.get(bulk_url, headers=headers, params=params, timeout=15)
+        block_res = session.get(block_url, headers=headers, params=params, timeout=15)
 
-        bulk_df = pd.DataFrame(bulk.get("data", []))
-        block_df = pd.DataFrame(block.get("data", []))
-
-        if bulk_df.empty and block_df.empty:
+        # Step 4: Data Processing
+        def process_json(res, type_label):
+            if res.status_code == 200:
+                data = res.json().get('data', [])
+                df = pd.DataFrame(data)
+                if not df.empty:
+                    df['Type'] = type_label
+                return df
             return pd.DataFrame()
 
-        bulk_df["Deal Type"] = "Bulk"
-        block_df["Deal Type"] = "Block"
+        df_bulk = process_json(bulk_res, "Bulk")
+        df_block = process_json(block_res, "Block")
 
-        df = pd.concat([bulk_df, block_df], ignore_index=True)
-
-        df["date"] = pd.to_datetime(df["date"], errors="coerce")
-
-        return df.sort_values("date", ascending=False)
-
-    except:
+        final_df = pd.concat([df_bulk, df_block], ignore_index=True)
+        
+        if not final_df.empty:
+            final_df["date"] = pd.to_datetime(final_df["date"], errors="coerce")
+            return final_df.sort_values("date", ascending=False)
+        
         return pd.DataFrame()
 
-combined_df = fetch_historical_deals(date_filter)
+    except Exception as e:
+        st.error(f"NSE Connection Error: {e}")
+        return pd.DataFrame()
 
-st.subheader("📊 Institutional Deals (Bulk + Block)")
+# ---------- DISPLAY LOGIC ----------
+data = fetch_nse_data(date_filter)
 
-# ---------- FILTER + DISPLAY ----------
-if combined_df.empty:
-    st.warning("No deals available for selected period.")
+st.subheader("📊 Institutional Deals")
+
+if data.empty:
+    st.info("No deals found for the selected period. NSE might be blocking the request if you are on a VPN or Cloud.")
 else:
-
-    # Filter by symbol
+    # Apply filtering based on Symbol selectbox
+    display_df = data.copy()
     if selected_symbol != "ALL STOCKS":
-        combined_df = combined_df[
-            combined_df["symbol"] == selected_symbol
-        ]
+        display_df = display_df[display_df["symbol"] == selected_symbol]
 
-    # Convert numeric columns safely
-    if "quantityTraded" in combined_df.columns:
-        combined_df["quantityTraded"] = pd.to_numeric(
-            combined_df["quantityTraded"], errors="coerce"
+    if display_df.empty:
+        st.warning(f"No deals found specifically for {selected_symbol}.")
+    else:
+        # Clean numeric values for display
+        cols_to_fix = ["quantityTraded", "price"]
+        for col in cols_to_fix:
+            if col in display_df.columns:
+                display_df[col] = pd.to_numeric(display_df[col], errors='coerce')
+
+        st.dataframe(
+            display_df,
+            column_config={
+                "date": st.column_config.DateColumn("Date"),
+                "symbol": "Symbol",
+                "clientName": "Entity Name",
+                "type": "Buy/Sell",
+                "quantityTraded": st.column_config.NumberColumn("Quantity", format="%d"),
+                "price": st.column_config.NumberColumn("Price", format="%.2f"),
+                "Type": "Deal Type"
+            },
+            use_container_width=True,
+            height=500
         )
-
-    if "price" in combined_df.columns:
-        combined_df["price"] = pd.to_numeric(
-            combined_df["price"], errors="coerce"
-        )
-
-    # Formatting rules
-    format_dict = {}
-
-    if "quantityTraded" in combined_df.columns:
-        format_dict["quantityTraded"] = "{:,.0f}"
-
-    if "price" in combined_df.columns:
-        format_dict["price"] = "{:,.2f}"
-
-    st.dataframe(
-        combined_df.style.format(format_dict),
-        height=600,
-        use_container_width=True
-    )
 
 st.divider()
 
 # ---------- NEWS SECTION ----------
-st.subheader("📰 Top 20 News Related to Bulk & Block Deals")
+st.subheader("📰 Relevant Market News")
 
-@st.cache_data(ttl=1800)
+@st.cache_data(ttl=3600)
 def fetch_news():
     rss_url = "https://www.moneycontrol.com/rss/MCtopnews.xml"
     feed = feedparser.parse(rss_url)
-    articles = []
+    items = []
+    # Simplified keywords to catch more news
+    keywords = ["bulk", "block", "stake", "equity", "deal", "bought", "sold"]
     for entry in feed.entries:
-        if ("bulk" in entry.title.lower() or 
-            "block deal" in entry.title.lower() or 
-            "institution" in entry.title.lower()):
-            articles.append({
-                "Title": entry.title,
-                "Link": entry.link
-            })
-    return articles[:20]
+        if any(k in entry.title.lower() for k in keywords):
+            items.append({"Title": entry.title, "Link": entry.link})
+    return items[:15]
 
-news_items = fetch_news()
-
-if not news_items:
-    st.info("No recent related news found.")
+news = fetch_news()
+if news:
+    for n in news:
+        st.markdown(f"• [{n['Title']}]({n['Link']})")
 else:
-    for item in news_items:
-        st.markdown(f"• [{item['Title']}]({item['Link']})")
+    st.write("No deal-specific news found in the last hour.")
