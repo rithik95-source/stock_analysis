@@ -67,9 +67,9 @@ with col2:
 st.caption("💡 Live commodity price charts • Auto-refreshes every 30 seconds")
 st.divider()
 
-# =========================
-# 🌍 SECTION 1: COMEX
-# =========================
+
+# SECTION 1: COMEX
+
 st.subheader("🌍 COMEX Futures (International)")
 commodities = [("Gold", "GC=F"), ("Silver", "SI=F"), ("Crude Oil", "CL=F"), ("Copper", "HG=F")]
 
@@ -230,9 +230,9 @@ for i in range(0, len(commodities), 2):
 
 st.divider()
 
-# =========================
-# 🇮🇳 SECTION 2: MCX
-# =========================
+
+# SECTION 2: MCX
+
 st.subheader("🇮🇳 MCX India (Converted to INR)")
 
 # MCX commodities with Yahoo Finance mapping
@@ -442,9 +442,9 @@ for i in range(0, len(mcx_commodities), 2):
 
 st.divider()
 
-# =========================
-# 🛢️ SECTION 3: BRENT CRUDE & BITCOIN
-# =========================
+
+# SECTION 3: BRENT CRUDE & BITCOIN
+
 st.subheader("🛢️ Global Benchmarks (USD)")
 
 global_assets = [("Brent Crude Oil", "BZ=F"), ("Bitcoin", "BTC-USD")]
@@ -589,9 +589,9 @@ for i in range(0, len(global_assets), 2):
 
 st.divider()
 
-# =========================
-# 📰 SECTION 4: MARKET NEWS
-# =========================
+
+# SECTION 4: MARKET NEWS
+
 st.subheader("📰 Market News & Headlines")
 st.caption("Latest updates from Economic Times, Moneycontrol, and more")
 
