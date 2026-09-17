@@ -64,7 +64,7 @@ with col2:
     if st.button("🔄 Refresh", use_container_width=True):
         st.rerun()
 
-st.caption("💡 Live commodity price charts • Auto-refreshes every 30 seconds")
+st.caption("Live commodity price charts • Auto-refreshes every 30 seconds")
 st.divider()
 
 
