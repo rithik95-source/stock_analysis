@@ -629,9 +629,9 @@ except Exception as e:
 
 st.divider()
 
-# Footer
+# Footer (check )
 col1, col2 = st.columns(2)
 with col1:
-    st.caption(f"📊 Last refresh: {datetime.now().strftime('%d %b %Y, %H:%M:%S')} • Refresh #{count}")
+    st.caption(f"Last refresh: {datetime.now().strftime('%d %b %Y, %H:%M:%S')} • Refresh #{count}")
 with col2:
-    st.caption("📈 Data from Yahoo Finance, MCX India, Economic Times & Moneycontrol")
+    st.caption("Data from Yahoo Finance, MCX India, Economic Times & Moneycontrol")
