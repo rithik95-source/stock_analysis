@@ -16,7 +16,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🔍 Stock Recommendations")
+st.title("Stock Recommendations")
 st.caption("Search any NSE stock to get intraday and long-term analyst targets")
 st.divider()
 
@@ -93,7 +93,7 @@ if selected_stock:
         with c1:
             st.metric("Current Market Price", f"₹{result['cmp']:,.2f}")
         with c2:
-            st.caption(f"📊 {result.get('data_source', 'Yahoo Finance')}")
+            st.caption(f"{result.get('data_source', 'Yahoo Finance')}")
 
         st.divider()
         intra_col, long_col = st.columns(2)
@@ -159,5 +159,5 @@ if selected_stock:
                     st.metric("Div Yield", f"{result['dividend_yield']:.2f}%")
 
 st.divider()
-st.caption("📊 Multi-source stock data  •  Recommendations are for informational purposes only  •  Data cached for 2 minutes")
+st.caption("Multi-source stock data  •  Recommendations are for informational purposes only  •  Data cached for 2 minutes")
 
