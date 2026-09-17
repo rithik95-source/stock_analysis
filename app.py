@@ -14,7 +14,7 @@ import pandas as pd
 # Page configuration
 st.set_page_config(page_title="Market Charts", layout="wide", page_icon="📊")
 
-# Auto-refresh every 30 seconds (30000 milliseconds)
+# Auto-refresh every 30 seconds 
 # Returns the number of times the app has refreshed
 count = st_autorefresh(interval=30000, limit=None, key="data_refresh")
 
