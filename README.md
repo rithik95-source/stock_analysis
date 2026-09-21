@@ -1,2 +1,1 @@
-# stock_analysis
-a web ui to analyse indian stock
+A personal side project built to explore and validate my ability to develop interactive dashboards using Python and Streamlit. The platform provides live MCX/COMEX commodity tracking, interactive market charts, global benchmarks, and real-time financial news.
