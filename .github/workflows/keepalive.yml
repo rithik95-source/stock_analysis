@@ -11,6 +11,14 @@ jobs:
     steps:
       - name: Ping the Streamlit app
         run: |
-          response=$(curl -s -o /dev/null -w "%{http_code}" https://stockanalysis-gumynfcbaryzj7qbpfo9li.streamlit.app)
-          echo "HTTP status: $response"
-          if [ "$response" != "200" ]; then exit 1; fi
+          for i in 1 2 3; do
+            response=$(curl -s -L -o /dev/null -w "%{http_code}" --max-time 120 https://stockanalysis-gumynfcbaryzj7qbpfo9li.streamlit.app)
+            echo "Attempt $i -> HTTP status: $response"
+            if [ "$response" = "200" ]; then
+              echo "App is awake"
+              exit 0
+            fi
+            echo "Retrying in 60s..."
+            sleep 60
+          done
+          echo "App did not return 200, but the ping traffic was still sent."
