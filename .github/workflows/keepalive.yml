@@ -2,23 +2,64 @@ name: Keep Streamlit Awake
 
 on:
   schedule:
-    - cron: "0 1,9,17 * * *"   # 3 pings a day, 8 hours apart (UTC)
-  workflow_dispatch:            # manual trigger for testing
+    - cron: "0 1,9,17 * * *"   # every 8h (UTC)
+  workflow_dispatch:
 
 jobs:
-  ping:
+  wake:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - name: Ping the Streamlit app
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Playwright
         run: |
-          for i in 1 2 3; do
-            response=$(curl -s -L -o /dev/null -w "%{http_code}" --max-time 120 https://stockanalysis-gumynfcbaryzj7qbpfo9li.streamlit.app)
-            echo "Attempt $i -> HTTP status: $response"
-            if [ "$response" = "200" ]; then
-              echo "App is awake"
-              exit 0
-            fi
-            echo "Retrying in 60s..."
-            sleep 60
-          done
-          echo "App did not return 200, but the ping traffic was still sent."
+          pip install playwright
+          playwright install --with-deps chromium
+
+      - name: Visit app and wake it if asleep
+        env:
+          APP_URL: https://stockanalysis-gumynfcbaryzj7qbpfo9li.streamlit.app
+        run: |
+          python - <<'EOF'
+          import os, re, sys
+          from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
+
+          url = os.environ["APP_URL"]
+
+          with sync_playwright() as p:
+              browser = p.chromium.launch()
+              page = browser.new_page()
+              page.goto(url, wait_until="domcontentloaded", timeout=60000)
+
+              btn = page.get_by_role("button", name=re.compile("get this app back up", re.I))
+              try:
+                  btn.wait_for(state="visible", timeout=15000)
+                  print("App was asleep - clicking wake button")
+                  btn.click()
+              except PWTimeout:
+                  print("No sleep screen - app already awake")
+
+              try:
+                  page.frame_locator("iframe[title='streamlitApp']") \
+                      .locator("[data-testid='stApp']") \
+                      .wait_for(state="visible", timeout=120000)
+                  print("App is live")
+              except PWTimeout:
+                  print("App did NOT load")
+                  page.screenshot(path="fail.png")
+                  browser.close()
+                  sys.exit(1)
+
+              page.wait_for_timeout(20000)  # keep the session open so it registers as traffic
+              browser.close()
+          EOF
+
+      - name: Upload screenshot on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fail-screenshot
+          path: fail.png
